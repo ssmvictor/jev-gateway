@@ -169,7 +169,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
     const url = new URL(c.req.url);
     const fromUrl = adapter.fromUrl?.(url) ?? {};
-    const entry = { event: "route", time, path: c.req.path, model: req?.model ?? fromUrl.model, tools: tools ?? req?.tools?.length ?? 0 };
+    const entry = { event: "route", time, path: c.req.path, model: req?.model ?? (req as any)?.request?.model ?? fromUrl.model, tools: tools ?? (req as any)?.request?.tools?.length ?? req?.tools?.length ?? 0 };
     // Building an answer or a rewrite is the gateway's own work. If it breaks, the original
     // request still goes upstream: the router must never be the reason a request fails.
     const giveUp = (error: unknown): Decision => ({
@@ -213,7 +213,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
     if (rewrittenBody !== undefined && rewritten && decision.mode !== "passthrough") {
       const response = await forward(c.req.raw, config, fetchImpl, { body: rewrittenBody, responseHeaders: decisionHeaders(decision) });
-      const sent = { mode: decision.mode, model: rewritten.model, tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice };
+      const sent = { mode: decision.mode, model: rewritten.model ?? (rewritten as any)?.request?.model, tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice };
       dumpResponse("rejected", response, { sent });
       if (response.status !== 400 && response.status !== 422) {
         logWhenDone({ ...entry, ...decision }, response, startedAt);
@@ -261,7 +261,8 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     // Chat Completions and Anthropic Messages both use `messages`; only Anthropic has a top-level
     // `system` or tools described by `input_schema`. Gemini uses `contents`.
     const tools = Array.isArray(req.tools) ? (req.tools as Record<string, unknown>[]) : [];
-    const guess = "contents" in req
+    const hasContents = "contents" in req || ("request" in req && typeof req.request === "object" && req.request !== null && "contents" in req.request);
+    const guess = hasContents
       ? "gemini"
       : !("messages" in req)
         ? "responses"
@@ -283,6 +284,11 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/v1/messages", route(messagesAdapter));
   app.post("/v1beta/models/*", route(geminiAdapter));
   app.post("/exa.api_server_pb.ApiServerService/GetChatMessage", route(exaAdapter));
+  app.post("/v1beta/projects/*", route(geminiAdapter));
+  app.post("/v1beta1/projects/*", route(geminiAdapter));
+  app.post("/v1internal:generateContent", route(geminiAdapter));
+  app.post("/v1internal:streamGenerateContent", route(geminiAdapter));
+  app.post("/v1internal/models/*", route(geminiAdapter));
 
   // Everything else (models, embeddings, …) is proxied untouched.
   app.all("/v1/*", async (c) => {
@@ -291,6 +297,21 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     return response;
   });
   app.all("/v1beta/*", async (c) => {
+    const response = await forward(c.req.raw, config, fetchImpl);
+    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
+    return response;
+  });
+  app.all("/v1beta1/*", async (c) => {
+    const response = await forward(c.req.raw, config, fetchImpl);
+    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
+    return response;
+  });
+  app.all("/v1internal:*", async (c) => {
+    const response = await forward(c.req.raw, config, fetchImpl);
+    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
+    return response;
+  });
+  app.all("/v1internal/*", async (c) => {
     const response = await forward(c.req.raw, config, fetchImpl);
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;

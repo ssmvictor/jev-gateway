@@ -38,7 +38,9 @@
     "jev-opencode": "bin/jev-opencode.mjs",
     "jev-gemini": "bin/jev-gemini.mjs",
     "jev-devin": "bin/jev-devin.mjs",
-    "jev-kilo": "bin/jev-kilo.mjs"
+    "jev-kilo": "bin/jev-kilo.mjs",
+    "jev-antigravity": "bin/jev-antigravity.mjs",
+    "jev-agy": "bin/jev-agy.mjs"
   },
   "files": [
     "dist",
@@ -59,7 +61,9 @@
     "kilo": "node bin/jev-kilo.mjs",
     "gemini": "node bin/jev-gemini.mjs",
     "devin": "node bin/jev-devin.mjs",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
+    "antigravity": "node bin/jev-antigravity.mjs",
+    "agy": "node bin/jev-agy.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

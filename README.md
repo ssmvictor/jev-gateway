@@ -5,7 +5,7 @@ the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast d
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
 LLM untouched.
 
-It works with **Codex**, **Claude Code**, **OpenCode** and **Kilo** out of the box, including on
+It works with **Codex**, **Claude Code**, **OpenCode** **Kilo** and **Antigravity CLI** out of the box, including on
 ChatGPT and claude.ai subscriptions, with Gemini API clients, and with any client that speaks the
 OpenAI, Anthropic or Google Gemini APIs.
 
@@ -33,6 +33,7 @@ jev-opencode   # use it exactly like `opencode` (stable v1)
 jev-kilo       # Kilo CLI, on free models unless KILO_API_KEY is set
 jev-gemini     # Gemini CLI, with a Gemini API key
 jev-devin      # use it exactly like `devin`
+jev-antigravity # use it exactly like `agy` (or `jev-agy`)
 ```
 
 **3. Answer two questions, once**
@@ -79,7 +80,7 @@ gateway.
 ## Commands
 
 All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `jev-gemini` and
-`jev-devin`.
+`jev-devin` and `jev-antigravity` (or `jev-agy`).
 
 | Command | What it does |
 | --- | --- |
@@ -96,8 +97,8 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `j
 | `jev-codex --gateway-help` | List all of the above |
 
 Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792 and Kilo
-8793. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
-`JEV_GEMINI_PORT`, `JEV_DEVIN_PORT` and `JEV_KILO_PORT`.
+8793, and Antigravity CLI 8787. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
+`JEV_GEMINI_PORT`, `JEV_DEVIN_PORT`, `JEV_KILO_PORT` and `JEV_ANTIGRAVITY_PORT`.
 
 ## Dashboard
 
@@ -452,6 +453,25 @@ One safety net does not reach Devin. Elsewhere, when the upstream refuses a rewr
 400 or 422, the gateway sends the original instead. Connect streams report errors inside the
 stream, after an HTTP 200, so a refused `hint` reaches Devin as a failed turn. Set
 `JEV_ROUTING=off` or run `devin` directly if that happens.
+## Using it with Antigravity CLI
+
+`jev-antigravity` (or `jev-agy`) runs Google Antigravity CLI (`agy`) with `CLOUD_CODE_URL`,
+`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_BASE` pointed at a gateway on port 8787.
+
+Every flag is passed through, so commands like `jev-antigravity --mode plan` or `jev-agy` work
+seamlessly with full plan mode and workflow support.
+
+### Upstream and routing
+
+- **Logged in with Google account / Plan mode (Cloud Code)**: By default, the gateway forwards to
+  `https://daily-cloudcode-pa.googleapis.com` (override with `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL`).
+  The gateway routes Cloud Code's wrapped `/v1internal:generateContent`, `/v1internal:streamGenerateContent`,
+  `/v1internal/models/*`, and project endpoints (`/v1beta/projects/*`, `/v1beta1/projects/*`),
+  unwrapping payloads for Jev decisions, forcing tools via `toolConfig`, and wrapping direct responses
+  back into Cloud Code's expected `{ response: ... }` format. Management calls such as
+  `/v1internal:loadCodeAssist` pass through untouched.
+- **Gemini API Key mode**: If `GEMINI_API_KEY` is set in your environment or `~/.gemini/antigravity-cli/settings.json` has `"modelProvider": "gemini"`,
+  the gateway defaults to forwarding to `https://generativelanguage.googleapis.com`.
 
 ## Running it as a server for your own app
 
@@ -479,6 +499,8 @@ The gateway routes these endpoints and proxies every other path unchanged:
 | `POST /v1/messages` | Anthropic Messages |
 | `POST /v1beta/models/*` | Google Gemini API (`generateContent`, `streamGenerateContent`) |
 | `POST /exa.api_server_pb.ApiServerService/GetChatMessage` | Devin CLI (Connect/protobuf) |
+| `POST /v1internal:generateContent`, `:streamGenerateContent` | Cloud Code / Antigravity internal content generation |
+| `POST /v1beta/projects/*`, `/v1beta1/projects/*` | Cloud Code / Antigravity project content generation |
 
 By default your client's own `Authorization` header is forwarded to the provider. Set
 `UPSTREAM_API_KEY` to have the gateway hold the provider key instead, and `ROUTER_API_KEY` to
