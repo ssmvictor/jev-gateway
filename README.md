@@ -5,9 +5,11 @@ the gateway asks [Jev](https://docs.typesafe.ai/introduction), TypeSafe's fast d
 instead of leaving that choice to the expensive reasoning model. Everything else goes to your usual
 LLM untouched.
 
-It works with **Codex**, **Claude Code**, **OpenCode** **Kilo** and **Antigravity CLI** out of the box, including on
+It works with **Codex**, **Claude Code**, **OpenCode** and **Kilo** out of the box, including on
 ChatGPT and claude.ai subscriptions, with Gemini API clients, and with any client that speaks the
-OpenAI, Anthropic or Google Gemini APIs.
+OpenAI, Anthropic or Google Gemini APIs. An [Antigravity CLI launcher](#using-it-with-antigravity-cli)
+is also available; its Cloud Code generation path has unit tests but has not yet been run against
+the real API.
 
 > Independent project, not affiliated with or endorsed by TypeSafe. "Jev" is TypeSafe's model and
 > this gateway is a client of its public API.
@@ -15,8 +17,8 @@ OpenAI, Anthropic or Google Gemini APIs.
 ## Quick start
 
 You need Node.js 22.15 or newer, a key for Jev (from TypeSafe, OpenRouter, Vercel AI Gateway or
-OpenCode, see [Where Jev runs](#where-jev-runs)), and Codex, Claude Code, OpenCode, Kilo and/or
-Devin already installed and logged in.
+OpenCode, see [Where Jev runs](#where-jev-runs)), and Codex, Claude Code, OpenCode, Kilo,
+Devin and/or Antigravity CLI already installed and logged in.
 
 **1. Install**
 
@@ -27,12 +29,12 @@ npm install -g jev-gateway
 **2. Run your agent through the gateway**
 
 ```bash
-jev-codex      # use it exactly like `codex`
-jev-claude     # use it exactly like `claude`
-jev-opencode   # use it exactly like `opencode` (stable v1)
-jev-kilo       # Kilo CLI, on free models unless KILO_API_KEY is set
-jev-gemini     # Gemini CLI, with a Gemini API key
-jev-devin      # use it exactly like `devin`
+jev-codex       # use it exactly like `codex`
+jev-claude      # use it exactly like `claude`
+jev-opencode    # use it exactly like `opencode` (stable v1)
+jev-kilo        # Kilo CLI, on free models unless KILO_API_KEY is set
+jev-gemini      # Gemini CLI, with a Gemini API key
+jev-devin       # use it exactly like `devin`
 jev-antigravity # use it exactly like `agy` (or `jev-agy`)
 ```
 
@@ -60,15 +62,15 @@ jev-codex --dashboard
 ```
 
 That's it. Your existing login keeps working, nothing in `~/.codex`, `~/.claude`,
-`~/.config/opencode`, or `~/.config/kilo` is changed, and plain `codex`, `claude`, `opencode`,
-and `kilo` still behave as before. Only sessions started with the `jev-` commands go through the
-gateway.
+`~/.config/opencode`, `~/.config/kilo`, or `~/.gemini/antigravity-cli` is changed, and plain
+`codex`, `claude`, `opencode`, `kilo` and `agy` still behave as before. Only sessions started with
+the `jev-` commands go through the gateway.
 
 ## What to expect
 
-- The first `jev-codex`, `jev-claude`, `jev-opencode`, or `jev-kilo` starts a small gateway in the
-  background and then opens your agent. Every argument is passed through, so `jev-codex exec "fix the
-  failing test"` works like `codex exec "fix the failing test"`.
+- The first `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, or `jev-antigravity` starts a small
+  gateway in the background and then opens your agent. Every argument is passed through, so
+  `jev-codex exec "fix the failing test"` works like `codex exec "fix the failing test"`.
 - The gateway keeps running after you close the agent, so the next session starts instantly. Stop it
   with `--stop`.
 - Each turn, the gateway asks Jev which tool fits. When Jev is confident, the gateway steers the LLM
@@ -79,7 +81,7 @@ gateway.
 
 ## Commands
 
-All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `jev-gemini` and
+All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `jev-gemini`,
 `jev-devin` and `jev-antigravity` (or `jev-agy`).
 
 | Command | What it does |
@@ -96,8 +98,8 @@ All of these work with `jev-codex`, `jev-claude`, `jev-opencode`, `jev-kilo`, `j
 | `jev-codex --print-config` | Print settings to point plain `codex` at the gateway permanently |
 | `jev-codex --gateway-help` | List all of the above |
 
-Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792 and Kilo
-8793, and Antigravity CLI 8787. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
+Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devin 8792, Kilo 8793
+and Antigravity CLI 8795. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
 `JEV_GEMINI_PORT`, `JEV_DEVIN_PORT`, `JEV_KILO_PORT` and `JEV_ANTIGRAVITY_PORT`.
 
 ## Dashboard
@@ -107,8 +109,8 @@ jev-codex --dashboard     # or: jev-claude --dashboard, jev-opencode --dashboard
 ```
 
 This opens `http://localhost:8790/dashboard`. If no browser window appears, paste that address into
-your browser. One page shows each gateway (Codex, Claude, OpenCode, Kilo, Gemini and
-Devin) and refreshes every 2 seconds.
+your browser. One page shows each gateway (Codex, Claude, OpenCode, Kilo, Gemini, Devin and
+Antigravity) and refreshes every 2 seconds.
 
 To find the other gateways, the page tries their default ports. A port that never answered is
 tried again after 10 seconds, then less often, down to once a minute; each try that finds nothing
@@ -453,25 +455,35 @@ One safety net does not reach Devin. Elsewhere, when the upstream refuses a rewr
 400 or 422, the gateway sends the original instead. Connect streams report errors inside the
 stream, after an HTTP 200, so a refused `hint` reaches Devin as a failed turn. Set
 `JEV_ROUTING=off` or run `devin` directly if that happens.
+
 ## Using it with Antigravity CLI
 
-`jev-antigravity` (or `jev-agy`) runs Google Antigravity CLI (`agy`) with `CLOUD_CODE_URL`,
-`GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_BASE` pointed at a gateway on port 8787.
+`jev-antigravity` (or `jev-agy`) runs Antigravity CLI (`agy`) through a gateway on port 8795.
+It points `CLOUD_CODE_URL`, `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_BASE` at the gateway for that
+process, without writing the client's settings. Every argument is passed through, including
+`--mode plan`, which is an Antigravity flag.
 
-Every flag is passed through, so commands like `jev-antigravity --mode plan` or `jev-agy` work
-seamlessly with full plan mode and workflow support.
+The upstream follows the client's provider:
 
-### Upstream and routing
+| Configuration | Upstream |
+| --- | --- |
+| Google account, or no readable provider setting | `https://daily-cloudcode-pa.googleapis.com` |
+| `GEMINI_API_KEY` is set, or `settings.json` has `"modelProvider": "gemini"` | `https://generativelanguage.googleapis.com` |
+| `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL` is set | That URL, overriding provider detection |
 
-- **Logged in with Google account / Plan mode (Cloud Code)**: By default, the gateway forwards to
-  `https://daily-cloudcode-pa.googleapis.com` (override with `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL`).
-  The gateway routes Cloud Code's wrapped `/v1internal:generateContent`, `/v1internal:streamGenerateContent`,
-  `/v1internal/models/*`, and project endpoints (`/v1beta/projects/*`, `/v1beta1/projects/*`),
-  unwrapping payloads for Jev decisions, forcing tools via `toolConfig`, and wrapping direct responses
-  back into Cloud Code's expected `{ response: ... }` format. Management calls such as
-  `/v1internal:loadCodeAssist` pass through untouched.
-- **Gemini API Key mode**: If `GEMINI_API_KEY` is set in your environment or `~/.gemini/antigravity-cli/settings.json` has `"modelProvider": "gemini"`,
-  the gateway defaults to forwarding to `https://generativelanguage.googleapis.com`.
+The settings file is `~/.gemini/antigravity-cli/settings.json`. Change the port with
+`JEV_ANTIGRAVITY_PORT`.
+
+The Cloud Code adapter handles wrapped requests on `POST /v1internal:generateContent` and
+`POST /v1internal:streamGenerateContent`. It forces tools inside `request.toolConfig`, wraps direct
+answers in `response`, and returns SSE when `?alt=sse` is present. Other internal calls, including
+account and model management, pass through untouched with the client's headers.
+
+Antigravity CLI 1.2.8 was inspected locally. The earlier
+[review of #16](https://github.com/vinilana/jev-gateway/pull/16) observed management calls from `agy` 1.1.19 through `CLOUD_CODE_URL` against a local stub. This
+integration has unit tests but has not yet been run against the real API: generation, direct
+answers and streaming remain unverified with the service. The Cloud Code default host is also
+unverified; set `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL` if your client uses a different host.
 
 ## Running it as a server for your own app
 
@@ -500,7 +512,6 @@ The gateway routes these endpoints and proxies every other path unchanged:
 | `POST /v1beta/models/*` | Google Gemini API (`generateContent`, `streamGenerateContent`) |
 | `POST /exa.api_server_pb.ApiServerService/GetChatMessage` | Devin CLI (Connect/protobuf) |
 | `POST /v1internal:generateContent`, `:streamGenerateContent` | Cloud Code / Antigravity internal content generation |
-| `POST /v1beta/projects/*`, `/v1beta1/projects/*` | Cloud Code / Antigravity project content generation |
 
 By default your client's own `Authorization` header is forwarded to the provider. Set
 `UPSTREAM_API_KEY` to have the gateway hold the provider key instead, and `ROUTER_API_KEY` to

@@ -69,6 +69,87 @@ function setup(canned: Parameters<typeof fakeJev>[0]) {
 
 const shellDecision = { tool: { choice: "shell" }, needs_tool: { noul: 0.95 } };
 
+const listPlansTool = {
+  functionDeclarations: [{ name: "list_plans", parameters: { type: "object", properties: {} } }],
+};
+const listPlansDecision = { tool: { choice: "list_plans" }, needs_tool: { noul: 0.95 } };
+const listPlansContent = { role: "user", parts: [{ text: "list plans" }] };
+const invalidCollectionCases: [string, unknown][] = [
+  [
+    "contents",
+    geminiRequest({ contents: [null, "bad", [], listPlansContent], tools: [listPlansTool] }),
+  ],
+  [
+    "parts",
+    geminiRequest({ contents: [{ role: "user", parts: [null, "bad", [], { text: "list plans" }] }], tools: [listPlansTool] }),
+  ],
+  [
+    "systemInstruction.parts",
+    geminiRequest({ systemInstruction: { parts: [null, "bad", [], { text: "instructions" }] }, tools: [listPlansTool] }),
+  ],
+  ["tools", geminiRequest({ tools: [null, "bad", [], listPlansTool] })],
+  [
+    "functionDeclarations",
+    geminiRequest({ tools: [{ functionDeclarations: [null, "bad", [], listPlansTool.functionDeclarations[0]] }] }),
+  ],
+  [
+    "part text",
+    geminiRequest({ contents: [{ role: "user", parts: [{ text: 17 }, { text: "list plans" }] }], tools: [listPlansTool] }),
+  ],
+  [
+    "functionCall name",
+    geminiRequest({
+      contents: [{ role: "model", parts: [{ functionCall: { name: 17 } }, { text: "list plans" }] }],
+      tools: [listPlansTool],
+    }),
+  ],
+  [
+    "functionResponse",
+    geminiRequest({
+      contents: [{ role: "user", parts: [{ functionResponse: { name: 17 } }, { text: "list plans" }] }],
+      tools: [listPlansTool],
+    }),
+  ],
+  [
+    "functionDeclaration name",
+    geminiRequest({ tools: [{ functionDeclarations: [{ name: 17 }, listPlansTool.functionDeclarations[0]] }] }),
+  ],
+];
+
+describe("malformed Gemini collections", () => {
+  it.each(invalidCollectionCases)("passes through the original request when %s contains malformed entries", async (_name, body) => {
+    const { post, jev, upstream } = setup(listPlansDecision);
+    const response = await post(body);
+
+    expect(jev.requests).toHaveLength(0);
+    expect(response.headers.get("x-jev-gateway-reason")).toBe("unreadable_request");
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]?.body).toEqual(body);
+  });
+
+  it("keeps valid hosted tools and unknown multimodal part keys routable", async () => {
+    const body = geminiRequest({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: "list plans" },
+            { inlineData: { mimeType: "image/png", data: "AA==" } },
+            { futurePart: { value: true } },
+          ],
+        },
+      ],
+      tools: [listPlansTool, { googleSearch: {} }, { futureHostedTool: { enabled: true } }],
+    });
+    const { post, jev, upstream } = setup(listPlansDecision);
+    const response = await post(body);
+
+    expect(jev.requests).toHaveLength(1);
+    expect(upstream.calls).toHaveLength(0);
+    expect(response.status).toBe(200);
+  });
+});
+
 describe("POST /v1beta/models/...:generateContent", () => {
   it("translates Gemini contents and systemInstruction into Jev turns and tool declarations", async () => {
     const { post, jev } = setup(shellDecision);
@@ -207,6 +288,8 @@ describe("POST /v1beta/models/...:generateContent", () => {
     expect(JSON.parse(array.text)[0].usageMetadata).toEqual({ promptTokenCount: 123, candidatesTokenCount: 0, totalTokenCount: 123 });
 
     expect((await direct("/v1beta/models/gemini-2.5-pro:generateContent")).type).toContain("application/json");
+    const malformedOperation = await direct("/v1beta/models/gemini-2.5-pro:countTokens:streamGenerateContent");
+    expect(Array.isArray(JSON.parse(malformedOperation.text))).toBe(false);
   });
 
   it("offers Google-run tools to Jev without forcing them, and respects allowedFunctionNames", async () => {
@@ -248,6 +331,13 @@ describe("POST /v1beta/models/...:generateContent", () => {
               { text: "Thinking about the files in the directory...", thought: true },
               {
                 functionCall: {
+                  name: "hidden_thought_call",
+                  args: { command: "do not include" },
+                },
+                thought: true,
+              },
+              {
+                functionCall: {
                   name: "shell",
                   args: { command: "ls" },
                 },
@@ -284,6 +374,64 @@ describe("POST /v1beta/models/...:generateContent", () => {
 
       const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string }[] };
       expect(feed.events[0]?.model).toBe("gemini-3.8-flash-high");
+    });
+
+    it("records a nested model when the envelope has no top-level model", async () => {
+      const { post, app } = setup(shellDecision);
+      const body = { ...wrappedInternalRequest(), model: undefined, request: geminiRequest({ model: "nested-gemini" }) };
+      await post(body, "/v1internal:generateContent");
+      await settled();
+
+      const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string }[] };
+      expect(feed.events[0]?.model).toBe("nested-gemini");
+    });
+
+    it("disables tools inside a wrapped request when Jev is confident no tool is needed", async () => {
+      const { post, upstream } = setup({ tool: { choice: NO_TOOL }, needs_tool: { noul: 0.05 } });
+      await post(wrappedInternalRequest(), "/v1internal:generateContent");
+
+      const sent = upstream.calls[0]!.body as {
+        request?: { toolConfig?: { functionCallingConfig?: { mode: string } } };
+      };
+      expect(sent.request?.toolConfig?.functionCallingConfig).toEqual({ mode: "NONE" });
+    });
+
+    it("passes a malformed internal envelope upstream without asking Jev", async () => {
+      const { post, upstream, jev } = setup(shellDecision);
+      const malformed = { ...geminiRequest(), request: [] };
+      await post(malformed, "/v1internal:generateContent");
+
+      expect(jev.requests).toHaveLength(0);
+      expect(upstream.calls[0]?.body).toEqual(malformed);
+    });
+
+    it.each([400, 422])("replays the original wrapped body when the provider rejects a rewrite with %i", async (status) => {
+      const jev = fakeJev(shellDecision);
+      const sent: unknown[] = [];
+      const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body;
+        const text = typeof body === "string" ? body : body instanceof Uint8Array ? Buffer.from(body).toString("utf8") : "";
+        sent.push(JSON.parse(text));
+        return sent.length === 1 ? Response.json({ error: "unsupported rewrite" }, { status }) : Response.json({ ok: true });
+      }) as typeof fetch;
+      const app = createApp({ config: testConfig(), askJev: jev.askJev, fetch: fetchImpl });
+      const original = wrappedInternalRequest();
+      const response = await app.request("/v1internal:generateContent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(original),
+      });
+
+      expect(sent).toHaveLength(2);
+      const rewritten = sent[0] as {
+        request: { toolConfig?: { functionCallingConfig?: { mode: string; allowedFunctionNames?: string[] } } };
+      };
+      expect(rewritten.request.toolConfig?.functionCallingConfig).toEqual({
+        mode: "ANY",
+        allowedFunctionNames: ["shell"],
+      });
+      expect(sent[1]).toEqual(original);
+      expect(response.headers.get("x-jev-gateway-reason")).toBe("upstream_rejected_forced");
     });
 
     it("translates Cloud Code internal wrapped request into Jev turns and tool declarations", async () => {
@@ -359,6 +507,28 @@ describe("POST /v1beta/models/...:generateContent", () => {
       });
     });
 
+    it("returns a JSON array for internal stream generation unless alt=sse is requested", async () => {
+      const canned = {
+        tool: { choice: "list_plans" },
+        needs_tool: { noul: 0.9 },
+      };
+      const noArgs = { functionDeclarations: [{ name: "list_plans", parameters: { type: "object", properties: {} } }] };
+      const body = wrappedInternalRequest({ tools: [noArgs] });
+      const direct = async (path: string) => {
+        const { post } = setup(canned);
+        const response = await post(body, path);
+        return { response, text: await response.text() };
+      };
+
+      const array = await direct("/v1internal:streamGenerateContent");
+      expect(array.response.headers.get("content-type")).toContain("application/json");
+      expect(Array.isArray(JSON.parse(array.text))).toBe(true);
+
+      const sse = await direct("/v1internal:streamGenerateContent?alt=sse");
+      expect(sse.response.headers.get("content-type")).toContain("text/event-stream");
+      expect(sse.text).toContain("data: ");
+    });
+
     it("streams direct answers as SSE on /v1internal:streamGenerateContent", async () => {
       const { post, upstream } = setup({
         tool: { choice: "set_lights" },
@@ -387,7 +557,7 @@ describe("POST /v1beta/models/...:generateContent", () => {
             },
           ],
         }),
-        "/v1internal:streamGenerateContent",
+        "/v1internal:streamGenerateContent?alt=sse",
       );
       expect(upstream.calls).toHaveLength(0);
       expect(response.status).toBe(200);
@@ -397,22 +567,65 @@ describe("POST /v1beta/models/...:generateContent", () => {
       expect(chunk.response.candidates[0].content.parts[0].functionCall.name).toBe("set_lights");
     });
 
-    it("proxies /v1internal management and model requests untouched", async () => {
+    it("proxies management calls untouched with their credentials and headers", async () => {
       const jev = fakeJev(shellDecision);
-      const upstream = fakeUpstream();
+      const calls: { url: string; headers: Headers; body: unknown }[] = [];
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body;
+        calls.push({
+          url: String(input),
+          headers: new Headers(init?.headers),
+          body: body ? await new Response(body).json() : undefined,
+        });
+        return Response.json({ ok: true });
+      }) as typeof fetch;
       const app = createApp({
         config: testConfig({ upstreamBaseUrl: "https://daily-cloudcode-pa.googleapis.com" }),
         askJev: jev.askJev,
-        fetch: upstream.fetchImpl,
+        fetch: fetchImpl,
+      });
+      const headers = {
+        authorization: "Bearer client-oauth-token",
+        "content-type": "application/json",
+        "x-goog-api-key": "client-api-key",
+        "x-goog-api-client": "test-client/1",
+      };
+
+      await app.request("/v1internal:loadCodeAssist", { method: "POST", headers, body: JSON.stringify({ project: "proj-1" }) });
+      await app.request("/v1internal:fetchAvailableModels", { method: "POST", headers, body: "{}" });
+      await app.request("/v1internal/models/gemini-3.8-flash-high", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(geminiRequest()),
+      });
+      await app.request("/v1beta/projects/test-project/locations/global", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(geminiRequest()),
+      });
+      await app.request("/v1beta1/projects/test-project/locations/global", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(geminiRequest()),
       });
 
-      await app.request("/v1internal:loadCodeAssist", { method: "POST", body: JSON.stringify({ project: "proj-1" }) });
-      await app.request("/v1internal:fetchAvailableModels", { method: "POST", body: "{}" });
-
-      expect(upstream.calls.map((c) => c.url)).toEqual([
+      expect(calls.map((c) => c.url)).toEqual([
         "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
         "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal/models/gemini-3.8-flash-high",
+        "https://daily-cloudcode-pa.googleapis.com/v1beta/projects/test-project/locations/global",
+        "https://daily-cloudcode-pa.googleapis.com/v1beta1/projects/test-project/locations/global",
       ]);
+      for (const call of calls) {
+        expect(call.headers.get("authorization")).toBe(headers.authorization);
+        expect(call.headers.get("x-goog-api-key")).toBe(headers["x-goog-api-key"]);
+        expect(call.headers.get("x-goog-api-client")).toBe(headers["x-goog-api-client"]);
+        expect(call.headers.get("content-type")).toBe(headers["content-type"]);
+      }
+      expect(jev.requests).toHaveLength(0);
+      expect(calls[2]?.body).toEqual(geminiRequest());
+      expect(calls[3]?.body).toEqual(geminiRequest());
+      expect(calls[4]?.body).toEqual(geminiRequest());
     });
 
     it("auto-detects wrapped internal request in /router/decide", async () => {

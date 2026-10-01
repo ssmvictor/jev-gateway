@@ -342,14 +342,13 @@ export const gemini = {
 };
 
 /** Antigravity CLI talks to Cloud Code when logged in with a Google account/plan, or Gemini when configured with an API key. */
-function antigravityUpstream() {
+function antigravityUpstream(settingsPath = join(homedir(), ".gemini", "antigravity-cli", "settings.json")) {
   if (process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL) return process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL;
   if (process.env.GEMINI_API_KEY) {
     return "https://generativelanguage.googleapis.com";
   }
   try {
-    const agyHome = join(homedir(), ".gemini", "antigravity-cli");
-    const settings = JSON.parse(readFileSync(join(agyHome, "settings.json"), "utf8"));
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
     if (settings.modelProvider === "gemini") {
       return "https://generativelanguage.googleapis.com";
     }
@@ -363,7 +362,7 @@ export const antigravity = {
   name: "jev-antigravity",
   client: "agy",
   portEnv: "JEV_ANTIGRAVITY_PORT",
-  defaultPort: 8787,
+  defaultPort: 8795,
   upstream: antigravityUpstream,
   upstreamHelp:
     "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL   where Antigravity traffic goes; default follows your settings.json:\n" +
@@ -382,5 +381,3 @@ export const antigravity = {
     `# or with Gemini API key:\n` +
     `#   GOOGLE_GEMINI_BASE_URL=${origin} agy\n`,
 };
-
-export const agy = antigravity;

@@ -197,10 +197,10 @@ const REASONS = {
 const params = new URLSearchParams(location.search);
 const key = params.get("key");
 const ownPort = location.port || (location.protocol === "https:" ? "443" : "80");
-// The launchers' default ports and the standalone server's; `?peers=8795,8796` adds custom ones,
+// The launchers' default ports and the standalone server's; `?peers=8796,8797` adds custom ones,
 // `?peers=none` watches this router only.
 const peers = params.get("peers");
-const ports = new Set(peers === "none" ? [ownPort] : [ownPort, "8787", "8788", "8789", "8790", "8791", "8792", "8793", ...(peers ?? "").split(",").filter(Boolean)]);
+const ports = new Set(peers === "none" ? [ownPort] : [ownPort, "8787", "8788", "8789", "8790", "8791", "8792", "8793", "8795", ...(peers ?? "").split(",").filter(Boolean)]);
 const sources = [...ports].map((port) => ({
   port,
   own: port === ownPort,

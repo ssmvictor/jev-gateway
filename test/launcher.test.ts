@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -11,7 +13,7 @@ interface LauncherSpec {
   client: string;
   portEnv: string;
   defaultPort: number;
-  upstream: () => string;
+  upstream: (settingsFile?: string) => string;
   upstreamHelp: string;
   args?: (origin: string) => string[];
   env?: (origin: string) => Record<string, string>;
@@ -23,7 +25,6 @@ const codex = clients.codex as LauncherSpec;
 const claude = clients.claude as LauncherSpec;
 const devin = clients.devin as LauncherSpec;
 const antigravity = clients.antigravity as LauncherSpec;
-const agy = clients.agy as LauncherSpec;
 const agyLauncherBin = fileURLToPath(new URL("../bin/jev-antigravity.mjs", import.meta.url));
 
 const origin = "http://127.0.0.1:8791";
@@ -31,6 +32,15 @@ const launcherBin = fileURLToPath(new URL("../bin/jev-opencode.mjs", import.meta
 
 const managedEnv = ["OPENCODE_CONFIG_CONTENT", "JEV_OPENCODE_UPSTREAM_BASE_URL", "JEV_OPENCODE_MODEL", "JEV_CODEX_UPSTREAM_BASE_URL", "JEV_CLAUDE_UPSTREAM_BASE_URL", "JEV_DEVIN_UPSTREAM_BASE_URL", "CODEX_HOME", "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL", "GEMINI_API_KEY"] as const;
 const savedEnv: Record<string, string | undefined> = {};
+const temporaryDirs: string[] = [];
+
+function antigravitySettings(content?: string) {
+  const dir = mkdtempSync(join(tmpdir(), "jev-antigravity-"));
+  temporaryDirs.push(dir);
+  const path = join(dir, "settings.json");
+  if (content !== undefined) writeFileSync(path, content);
+  return path;
+}
 
 beforeEach(() => {
   for (const key of managedEnv) {
@@ -45,6 +55,7 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  for (const dir of temporaryDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 const inlineConfig = (originOverride = origin) => {
@@ -214,22 +225,37 @@ describe("jev-antigravity spec", () => {
     expect(antigravity.name).toBe("jev-antigravity");
     expect(antigravity.client).toBe("agy");
     expect(antigravity.portEnv).toBe("JEV_ANTIGRAVITY_PORT");
-    expect(antigravity.defaultPort).toBe(8787);
+    expect(antigravity.defaultPort).toBe(8795);
     expect([codex.defaultPort, claude.defaultPort, opencode.defaultPort, (clients.gemini as LauncherSpec).defaultPort]).not.toContain(antigravity.defaultPort);
-    expect(agy).toBe(antigravity);
   });
 
-  it("defaults upstream to Cloud Code with a JEV_ANTIGRAVITY_UPSTREAM_BASE_URL override", () => {
-    expect(antigravity.upstream()).toBe("https://daily-cloudcode-pa.googleapis.com");
+  it("defaults upstream to Cloud Code when settings.json is missing", () => {
+    expect(antigravity.upstream(antigravitySettings())).toBe("https://daily-cloudcode-pa.googleapis.com");
+  });
+
+  it("follows the model provider in settings.json", () => {
+    const path = antigravitySettings(JSON.stringify({ modelProvider: "cloudcode" }));
+    expect(antigravity.upstream(path)).toBe("https://daily-cloudcode-pa.googleapis.com");
+    writeFileSync(path, JSON.stringify({ modelProvider: "gemini" }));
+    expect(antigravity.upstream(path)).toBe("https://generativelanguage.googleapis.com");
+  });
+
+  it("uses Gemini when GEMINI_API_KEY is set, ahead of the settings provider", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const path = antigravitySettings(JSON.stringify({ modelProvider: "cloudcode" }));
+    expect(antigravity.upstream(path)).toBe("https://generativelanguage.googleapis.com");
+  });
+
+  it("gives the explicit upstream override precedence over the key and settings", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
     process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL = "https://custom-cloudcode.test";
-    expect(antigravity.upstream()).toBe("https://custom-cloudcode.test");
+    const path = antigravitySettings(JSON.stringify({ modelProvider: "gemini" }));
+    expect(antigravity.upstream(path)).toBe("https://custom-cloudcode.test");
     expect(antigravity.upstreamHelp).toContain("JEV_ANTIGRAVITY_UPSTREAM_BASE_URL");
   });
 
-  it("defaults upstream to Gemini when GEMINI_API_KEY is set in environment", () => {
-    process.env.GEMINI_API_KEY = "test-gemini-key";
-    expect(antigravity.upstream()).toBe("https://generativelanguage.googleapis.com");
-    delete process.env.GEMINI_API_KEY;
+  it("falls back to Cloud Code when settings.json is invalid", () => {
+    expect(antigravity.upstream(antigravitySettings("{"))).toBe("https://daily-cloudcode-pa.googleapis.com");
   });
 
   it("points CLOUD_CODE_URL, GOOGLE_GEMINI_BASE_URL, and GEMINI_API_BASE at the gateway", () => {
@@ -266,6 +292,6 @@ describe("jev-antigravity entrypoint", () => {
 
   it("--print-config prints the antigravity environment configuration without starting anything", () => {
     const out = execFileSync(process.execPath, [agyLauncherBin, "--print-config"], { encoding: "utf8", timeout: 30_000 });
-    expect(out).toContain("CLOUD_CODE_URL=http://127.0.0.1:8787 agy");
+    expect(out).toContain("CLOUD_CODE_URL=http://127.0.0.1:8795 agy");
   });
 });

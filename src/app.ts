@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import { Hono, type Context } from "hono";
-import type { Adapter } from "./adapters/adapter.js";
+import type { Adapter, RequestMetadata } from "./adapters/adapter.js";
 import { chatAdapter } from "./adapters/chat.js";
 import { geminiAdapter } from "./adapters/gemini.js";
 import { exaAdapter } from "./adapters/exa.js";
@@ -142,6 +142,13 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   };
 
   const route = <Req extends AnyRequest>(adapter: Adapter<Req>) => async (c: Context) => {
+    const metadata = (req: Req | undefined, url: URL): RequestMetadata => {
+      try {
+        return adapter.metadata?.(req, url) ?? {};
+      } catch {
+        return {};
+      }
+    };
     const startedAt = performance.now();
     const time = new Date().toISOString();
     const bytes = new Uint8Array(await c.req.arrayBuffer());
@@ -168,8 +175,14 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     else ({ decision, tools } = await decideFor(adapter, req));
 
     const url = new URL(c.req.url);
-    const fromUrl = adapter.fromUrl?.(url) ?? {};
-    const entry = { event: "route", time, path: c.req.path, model: req?.model ?? (req as any)?.request?.model ?? fromUrl.model, tools: tools ?? (req as any)?.request?.tools?.length ?? req?.tools?.length ?? 0 };
+    const requestMetadata = metadata(req, url);
+    const entry = {
+      event: "route",
+      time,
+      path: c.req.path,
+      model: req?.model ?? requestMetadata.model,
+      tools: tools ?? requestMetadata.tools ?? req?.tools?.length ?? 0,
+    };
     // Building an answer or a rewrite is the gateway's own work. If it breaks, the original
     // request still goes upstream: the router must never be the reason a request fails.
     const giveUp = (error: unknown): Decision => ({
@@ -182,7 +195,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
       try {
         const call = { tool: decision.tool, args: decision.args, inputTokens: decision.jev?.inputTokens ?? 0 };
         const headers = decisionHeaders(decision);
-        const streamed = (fromUrl.stream ?? req.stream) ? adapter.directStream(req, call, url) : undefined;
+        const streamed = (requestMetadata.stream ?? req.stream) ? adapter.directStream(req, call, url) : undefined;
         const json = streamed === undefined ? adapter.directJson(req, call) : undefined;
         log({ ...entry, ...decision });
         if (streamed === undefined) return c.json(json, 200, headers);
@@ -213,7 +226,12 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
 
     if (rewrittenBody !== undefined && rewritten && decision.mode !== "passthrough") {
       const response = await forward(c.req.raw, config, fetchImpl, { body: rewrittenBody, responseHeaders: decisionHeaders(decision) });
-      const sent = { mode: decision.mode, model: rewritten.model ?? (rewritten as any)?.request?.model, tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice };
+      const rewrittenMetadata = metadata(rewritten, url);
+      const sent = {
+        mode: decision.mode,
+        model: rewritten.model ?? rewrittenMetadata.model,
+        tool_choice: (rewritten as { tool_choice?: unknown }).tool_choice,
+      };
       dumpResponse("rejected", response, { sent });
       if (response.status !== 400 && response.status !== 422) {
         logWhenDone({ ...entry, ...decision }, response, startedAt);
@@ -284,11 +302,8 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
   app.post("/v1/messages", route(messagesAdapter));
   app.post("/v1beta/models/*", route(geminiAdapter));
   app.post("/exa.api_server_pb.ApiServerService/GetChatMessage", route(exaAdapter));
-  app.post("/v1beta/projects/*", route(geminiAdapter));
-  app.post("/v1beta1/projects/*", route(geminiAdapter));
   app.post("/v1internal:generateContent", route(geminiAdapter));
   app.post("/v1internal:streamGenerateContent", route(geminiAdapter));
-  app.post("/v1internal/models/*", route(geminiAdapter));
 
   // Everything else (models, embeddings, …) is proxied untouched.
   app.all("/v1/*", async (c) => {
