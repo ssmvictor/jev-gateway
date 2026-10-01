@@ -586,9 +586,9 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 | Mode | When | What happens |
 | --- | --- | --- |
 | `direct` | Jev is confident about the tool and every argument is an enum, boolean, or constant | The gateway builds the tool call itself, streaming included. **No LLM call.** Unavailable for Gemini API and Cloud Code wire formats. Their adapters use `forced` mode so Google supplies the `thoughtSignature` needed on later turns. Also unavailable with Claude Code extended thinking, because the next turn would replay a tool call without a thinking block, which the API rejects |
-| `forced` | Jev is confident about the tool, but some arguments are open-ended or the format requires a provider-generated call | Forwarded with the provider's tool-selection field set to that tool, so the LLM generates the call and fills its arguments. `ARGS_MODEL` can send these to a cheaper model |
+| `forced` | Jev is confident about the tool, but some arguments are open-ended or the format requires a provider-generated call | Forwarded with the provider's tool-selection field set to that tool, so the LLM generates the call and fills its arguments. `ARGS_MODEL` can change the model for Chat Completions, Responses and Messages; Gemini keeps the client's model |
 | `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, or a cached conversation) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
-| `none` | Jev is confident that no tool is needed | Forwarded with `tool_choice: "none"` |
+| `none` | Jev is confident that no tool is needed | Forwarded with the provider's no-tool setting |
 | `passthrough` | Low confidence, the two checks disagree, Jev failed, there are no tools, or the caller already chose | Forwarded byte for byte. `x-jev-gateway-reason` says why |
 
 Responses requests containing Codex `agent_message` items pass through without consulting Jev,
@@ -616,7 +616,7 @@ list. The ones worth knowing:
 | `JEV_DIRECT_CALLS` | `true` | Set to `false` so the gateway never answers without the LLM |
 | `JEV_ROUTING` | `on` | Set to `off` to start in baseline mode |
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
-| `ARGS_MODEL` | unset | A cheaper model for filling arguments in `forced` mode |
+| `ARGS_MODEL` | unset | A cheaper model for `forced` calls in Chat Completions, Responses and Messages; ignored for Gemini |
 | `HOST` | `127.0.0.1` | Interface to listen on. Set `ROUTER_API_KEY` before exposing it |
 | `JEV_DEBUG_DUMP_DIR` | unset | Write requests and response summaries to this folder. Credentials in headers are redacted; bodies are written whole, system prompts and conversation included, in files only you can read |
 
