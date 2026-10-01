@@ -459,6 +459,13 @@ stream, after an HTTP 200, so a refused `hint` reaches Devin as a failed turn. S
 ## Using it with Antigravity CLI
 
 `jev-antigravity` (or `jev-agy`) runs Antigravity CLI (`agy`) through a gateway on port 8795.
+
+Start a plan-mode session:
+
+```bash
+jev-agy --mode plan
+```
+
 It points `CLOUD_CODE_URL`, `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_BASE` at the gateway for that
 process, without writing the client's settings. Every argument is passed through, including
 `--mode plan`, which is an Antigravity flag.
@@ -479,9 +486,10 @@ The Cloud Code adapter handles wrapped requests on `POST /v1internal:generateCon
 answers in `response`, and returns SSE when `?alt=sse` is present. Other internal calls, including
 account and model management, pass through untouched with the client's headers.
 
-Antigravity CLI 1.2.8 was inspected locally. The earlier
-[review of #16](https://github.com/vinilana/jev-gateway/pull/16) observed management calls from `agy` 1.1.19 through `CLOUD_CODE_URL` against a local stub. This
-integration has unit tests but has not yet been run against the real API: generation, direct
+Local inspection of Antigravity CLI 1.2.8 covered `agy --version`, `agy --help` and strings in the
+installed binary. The earlier [review of #16](https://github.com/vinilana/jev-gateway/pull/16) observed
+management calls from `agy` 1.1.19 through `CLOUD_CODE_URL` against a local stub. This integration
+has unit tests but has not yet been run against the real API: generation, direct
 answers and streaming remain unverified with the service. The Cloud Code default host is also
 unverified; set `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL` if your client uses a different host.
 
