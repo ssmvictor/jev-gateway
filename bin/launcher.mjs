@@ -56,7 +56,7 @@ export async function runLauncher(spec) {
   ${spec.name} [${spec.client} args]    start the gateway if needed, then run ${spec.client} through it
   ${spec.name} --dashboard        open the monitoring dashboard in your browser
   ${spec.name} --routing on|off   off = baseline mode: stop asking Jev, keep counting tokens
-  ${spec.name} --status           is the gateway running, and where does it forward to?
+  ${spec.name} --status           check local gateway health and show server/CLI configuration
   ${spec.name} --logs             follow routing decisions live (use a second terminal)
   ${spec.name} --start            start the gateway without opening ${spec.client}
   ${spec.name} --stop             stop the background gateway
@@ -234,11 +234,41 @@ Environment (or ${ENV_FILES.at(-1)}):
     return console.log(`${spec.name}: router up on ${origin} → ${spec.upstream()} (logs: ${logFile})`);
   }
   if (flag === "--status") {
-    const running = await health();
-    const via = running?.jev ? `, Jev via ${providers[running.jev]?.label ?? running.jev}` : "";
-    console.log(running ? `${spec.name}: router up on ${origin} → ${running.upstream}${via}` : `${spec.name}: router is not running`);
+    let running;
+    let failure;
+    // Status reports query failures; lifecycle commands keep their existing health probe.
+    try {
+      const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1000) });
+      if (!response.ok) {
+        failure = `HTTP ${response.status}`;
+      } else {
+        const body = await response.json();
+        if (!body || typeof body !== "object" || Array.isArray(body) || body.status !== "ok") {
+          failure = "invalid health response";
+        } else {
+          running = body;
+        }
+      }
+    } catch (error) {
+      // Network errors can carry URLs and other private details; report only the failure category.
+      if (error instanceof SyntaxError) failure = "invalid JSON response";
+      else if (error?.name === "TimeoutError" || error?.name === "AbortError") failure = "request timed out";
+      else if ((error?.cause?.code ?? error?.code) === "ECONNREFUSED") failure = "connection refused";
+      else failure = "connection failed";
+    }
+    if (running) {
+      const upstream = typeof running.upstream === "string" && running.upstream ? ` → ${running.upstream}` : "";
+      const via = typeof running.jev === "string" && running.jev
+        ? `, server Jev provider: ${providers[running.jev]?.label ?? running.jev}` : "";
+      console.log(`${spec.name}: router up on ${origin}${upstream}${via}`);
+    } else {
+      console.log(`${spec.name}: health not confirmed on ${origin} (${failure})`);
+    }
     const configured = configuredProvider(process.env, providers);
-    console.log(configured ? `key: ${providers[configured].label} (${providers[configured].keyEnv})` : `key: none yet, run \`${spec.name} --setup\``);
+    console.log(configured
+      ? `CLI key: ${providers[configured].label} (${providers[configured].keyEnv}; presence only, validity not checked)`
+      : "CLI key: none configured for the local provider");
+    console.log("Jev authentication: not checked by --status");
     console.log(`logs: ${logFile}`);
     for (const line of await notices(process.argv.slice(3))) console.log(line);
     return;
