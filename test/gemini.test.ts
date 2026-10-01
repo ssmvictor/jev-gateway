@@ -54,9 +54,9 @@ const geminiRequest = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-function setup(canned: Parameters<typeof fakeJev>[0]) {
+function setup(canned: Parameters<typeof fakeJev>[0], reply?: unknown) {
   const jev = fakeJev(canned);
-  const upstream = fakeUpstream();
+  const upstream = fakeUpstream(reply);
   const app = createApp({ config: testConfig(), askJev: jev.askJev, fetch: upstream.fetchImpl });
   const post = (body: unknown, path = "/v1beta/models/gemini-2.0-flash:generateContent") =>
     app.request(path, {
@@ -145,7 +145,12 @@ describe("malformed Gemini collections", () => {
     const response = await post(body);
 
     expect(jev.requests).toHaveLength(1);
-    expect(upstream.calls).toHaveLength(0);
+    expect(response.headers.get("x-jev-gateway-mode")).toBe("forced");
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]?.body.toolConfig?.functionCallingConfig).toEqual({
+      mode: "ANY",
+      allowedFunctionNames: ["list_plans"],
+    });
     expect(response.status).toBe(200);
   });
 });
@@ -180,13 +185,28 @@ describe("POST /v1beta/models/...:generateContent", () => {
     });
   });
 
-  it("answers directly without an upstream call when all arguments are resolved", async () => {
-    const { post, upstream } = setup({
+  it("forces the provider to make a closed-set call with its signature", async () => {
+    const reply = {
+      candidates: [
+        {
+          content: {
+            role: "model",
+            parts: [
+              {
+                functionCall: { name: "set_lights", args: { room: "bedroom", on: true } },
+                thoughtSignature: "provider-signature",
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const { post, jev, upstream } = setup({
       tool: { choice: "set_lights" },
       needs_tool: { noul: 0.95 },
       "arg:0:room": { choice: "bedroom" },
       "arg:0:on": { noul: 0.99 },
-    });
+    }, reply);
     const response = await post(
       geminiRequest({
         tools: [
@@ -210,15 +230,14 @@ describe("POST /v1beta/models/...:generateContent", () => {
       }),
     );
 
-    expect(upstream.calls).toHaveLength(0);
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      candidates: Array<{ content: { parts: Array<{ functionCall?: { name: string; args: unknown } }> } }>;
-    };
-    expect(body.candidates[0]!.content.parts[0]!.functionCall).toEqual({
-      name: "set_lights",
-      args: { room: "bedroom", on: true },
+    expect(response.headers.get("x-jev-gateway-mode")).toBe("forced");
+    expect(upstream.calls).toHaveLength(1);
+    expect(Object.keys(jev.requests[0]!.questions)).not.toContain("arg:0:room");
+    expect(upstream.calls[0]?.body.toolConfig?.functionCallingConfig).toEqual({
+      mode: "ANY",
+      allowedFunctionNames: ["set_lights"],
     });
+    expect(await response.json()).toEqual(reply);
   });
 
   it("disables tools when Jev is confident no tool is needed", async () => {
@@ -267,28 +286,55 @@ describe("POST /v1beta/models/...:generateContent", () => {
     ]);
   });
 
-  it("reads the model and the choice to stream from the path", async () => {
+  it("preserves provider stream formats and reads the model from Gemini paths", async () => {
     const noArgs = { functionDeclarations: [{ name: "list_plans", description: "List saved plans.", parameters: { type: "object", properties: {} } }] };
     const canned = { tool: { choice: "list_plans" }, needs_tool: { noul: 0.9 } };
-    const direct = async (path: string) => {
-      const app = createApp({ config: testConfig(), askJev: fakeJev(canned).askJev, fetch: fakeUpstream().fetchImpl });
-      const res = await app.request(path, { method: "POST", body: JSON.stringify(geminiRequest({ tools: [noArgs] })) });
+    const reply = {
+      candidates: [{ content: { role: "model", parts: [{ text: "provider reply" }] } }],
+      usageMetadata: { promptTokenCount: 123, candidatesTokenCount: 1, totalTokenCount: 124 },
+    };
+    const request = geminiRequest({ tools: [noArgs] });
+    const routed = async (path: string) => {
+      const urls: string[] = [];
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        urls.push(url.pathname + url.search);
+        if (url.searchParams.get("alt") === "sse") {
+          return new Response("data: " + JSON.stringify(reply) + "\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        if (/:streamGenerateContent$/.test(url.pathname) && !url.pathname.includes(":countTokens:")) {
+          return new Response(JSON.stringify([reply]), { headers: { "content-type": "application/json" } });
+        }
+        return Response.json(reply);
+      }) as typeof fetch;
+      const app = createApp({ config: testConfig(), askJev: fakeJev(canned).askJev, fetch: fetchImpl });
+      const response = await app.request(path, { method: "POST", body: JSON.stringify(request) });
       await settled();
       const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string }[] };
-      return { type: res.headers.get("content-type"), text: await res.text(), model: feed.events[0]?.model };
+      return {
+        type: response.headers.get("content-type"),
+        mode: response.headers.get("x-jev-gateway-mode"),
+        text: await response.text(),
+        model: feed.events[0]?.model,
+        urls,
+      };
     };
 
-    const sse = await direct("/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse");
+    const sse = await routed("/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse");
     expect(sse.type).toContain("text/event-stream");
-    expect(JSON.parse(sse.text.replace(/^data: /, "")).candidates[0].content.parts[0].functionCall.name).toBe("list_plans");
+    expect(JSON.parse(sse.text.replace(/^data: /, "")).candidates[0].content.parts[0].text).toBe("provider reply");
+    expect(sse.mode).toBe("forced");
     expect(sse.model).toBe("gemini-2.5-pro");
+    expect(sse.urls[0]).toContain("gemini-2.5-pro:streamGenerateContent?alt=sse");
 
-    const array = await direct("/v1beta/models/gemini-2.5-pro:streamGenerateContent");
+    const array = await routed("/v1beta/models/gemini-2.5-pro:streamGenerateContent");
     expect(array.type).toContain("application/json");
-    expect(JSON.parse(array.text)[0].usageMetadata).toEqual({ promptTokenCount: 123, candidatesTokenCount: 0, totalTokenCount: 123 });
+    expect(JSON.parse(array.text)[0].usageMetadata).toEqual(reply.usageMetadata);
 
-    expect((await direct("/v1beta/models/gemini-2.5-pro:generateContent")).type).toContain("application/json");
-    const malformedOperation = await direct("/v1beta/models/gemini-2.5-pro:countTokens:streamGenerateContent");
+    expect((await routed("/v1beta/models/gemini-2.5-pro:generateContent")).type).toContain("application/json");
+    const malformedOperation = await routed("/v1beta/models/gemini-2.5-pro:countTokens:streamGenerateContent");
     expect(Array.isArray(JSON.parse(malformedOperation.text))).toBe(false);
   });
 
@@ -463,13 +509,30 @@ describe("POST /v1beta/models/...:generateContent", () => {
       });
     });
 
-    it("returns direct answers wrapped in response object for internal requests", async () => {
+    it("uses the provider response for wrapped calls so its signature is preserved", async () => {
+      const reply = {
+        response: {
+          candidates: [
+            {
+              content: {
+                role: "model",
+                parts: [
+                  {
+                    functionCall: { name: "set_lights", args: { room: "bedroom", on: true } },
+                    thoughtSignature: "cloudcode-provider-signature",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
       const { post, upstream } = setup({
         tool: { choice: "set_lights" },
         needs_tool: { noul: 0.95 },
         "arg:0:room": { choice: "bedroom" },
         "arg:0:on": { noul: 0.99 },
-      });
+      }, reply);
       const response = await post(
         wrappedInternalRequest({
           tools: [
@@ -494,77 +557,52 @@ describe("POST /v1beta/models/...:generateContent", () => {
         "/v1internal:generateContent",
       );
 
-      expect(upstream.calls).toHaveLength(0);
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        response: {
-          candidates: Array<{ content: { parts: Array<{ functionCall?: { name: string; args: unknown } }> } }>;
-        };
-      };
-      expect(body.response.candidates[0]!.content.parts[0]!.functionCall).toEqual({
-        name: "set_lights",
-        args: { room: "bedroom", on: true },
+      expect(response.headers.get("x-jev-gateway-mode")).toBe("forced");
+      expect(upstream.calls).toHaveLength(1);
+      expect(upstream.calls[0]?.body.request?.toolConfig?.functionCallingConfig).toEqual({
+        mode: "ANY",
+        allowedFunctionNames: ["set_lights"],
       });
+      expect(await response.json()).toEqual(reply);
     });
 
-    it("returns a JSON array for internal stream generation unless alt=sse is requested", async () => {
-      const canned = {
-        tool: { choice: "list_plans" },
-        needs_tool: { noul: 0.9 },
-      };
+    it("forwards the provider's JSON-array and SSE formats for wrapped streams", async () => {
+      const canned = { tool: { choice: "list_plans" }, needs_tool: { noul: 0.9 } };
       const noArgs = { functionDeclarations: [{ name: "list_plans", parameters: { type: "object", properties: {} } }] };
-      const body = wrappedInternalRequest({ tools: [noArgs] });
-      const direct = async (path: string) => {
-        const { post } = setup(canned);
-        const response = await post(body, path);
-        return { response, text: await response.text() };
+      const providerReply = { response: { candidates: [{ content: { role: "model", parts: [{ text: "provider reply" }] } }] } };
+      const routed = async (path: string) => {
+        const sent: Record<string, any>[] = [];
+        const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const body = init?.body;
+          const text = typeof body === "string" ? body : body instanceof Uint8Array ? Buffer.from(body).toString("utf8") : "";
+          sent.push(JSON.parse(text));
+          const url = new URL(String(input));
+          return url.searchParams.get("alt") === "sse"
+            ? new Response("data: " + JSON.stringify(providerReply) + "\n\n", { headers: { "content-type": "text/event-stream" } })
+            : new Response(JSON.stringify([providerReply]), { headers: { "content-type": "application/json" } });
+        }) as typeof fetch;
+        const jev = fakeJev(canned);
+        const app = createApp({ config: testConfig(), askJev: jev.askJev, fetch: fetchImpl });
+        const response = await app.request(path, {
+          method: "POST",
+          body: JSON.stringify(wrappedInternalRequest({ tools: [noArgs] })),
+        });
+        return { response, text: await response.text(), sent };
       };
 
-      const array = await direct("/v1internal:streamGenerateContent");
+      const array = await routed("/v1internal:streamGenerateContent");
       expect(array.response.headers.get("content-type")).toContain("application/json");
-      expect(Array.isArray(JSON.parse(array.text))).toBe(true);
-
-      const sse = await direct("/v1internal:streamGenerateContent?alt=sse");
-      expect(sse.response.headers.get("content-type")).toContain("text/event-stream");
-      expect(sse.text).toContain("data: ");
-    });
-
-    it("streams direct answers as SSE on /v1internal:streamGenerateContent", async () => {
-      const { post, upstream } = setup({
-        tool: { choice: "set_lights" },
-        needs_tool: { noul: 0.95 },
-        "arg:0:room": { choice: "bedroom" },
-        "arg:0:on": { noul: 0.99 },
+      expect(array.response.headers.get("x-jev-gateway-mode")).toBe("forced");
+      expect(JSON.parse(array.text)[0].response.candidates[0].content.parts[0].text).toBe("provider reply");
+      expect(array.sent[0]?.request?.toolConfig?.functionCallingConfig).toEqual({
+        mode: "ANY",
+        allowedFunctionNames: ["list_plans"],
       });
-      const response = await post(
-        wrappedInternalRequest({
-          tools: [
-            {
-              functionDeclarations: [
-                {
-                  name: "set_lights",
-                  description: "Turn lights on or off",
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      room: { type: "string", enum: ["kitchen", "bedroom"] },
-                      on: { type: "boolean" },
-                    },
-                    required: ["room", "on"],
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-        "/v1internal:streamGenerateContent?alt=sse",
-      );
-      expect(upstream.calls).toHaveLength(0);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toContain("text/event-stream");
-      const text = await response.text();
-      const chunk = JSON.parse(text.replace(/^data: /, "").trim());
-      expect(chunk.response.candidates[0].content.parts[0].functionCall.name).toBe("set_lights");
+
+      const sse = await routed("/v1internal:streamGenerateContent?alt=sse");
+      expect(sse.response.headers.get("content-type")).toContain("text/event-stream");
+      expect(sse.response.headers.get("x-jev-gateway-mode")).toBe("forced");
+      expect(JSON.parse(sse.text.replace(/^data: /, "")).response.candidates[0].content.parts[0].text).toBe("provider reply");
     });
 
     it("proxies management calls untouched with their credentials and headers", async () => {

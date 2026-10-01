@@ -186,6 +186,8 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
       ...rawDecls.map((fn) => ({ kind: "function" as const, name: fn.name, description: fn.description, parameters: fn.parameters })),
       ...[...new Set(hosted)].map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
     ],
+    // Gemini replays provider signatures on later turns; synthetic calls cannot carry them.
+    directCalls: false,
     toolChoice,
   };
 }
