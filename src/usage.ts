@@ -55,6 +55,10 @@ function merge(into: Partial<Usage>, raw: Raw): void {
 }
 
 function collect(payload: unknown, into: Partial<Usage>): void {
+  if (Array.isArray(payload)) {
+    for (const item of payload) collect(item, into);
+    return;
+  }
   const root = obj(payload);
   // Where each API keeps it: top level (JSON replies, chat chunks, message_delta),
   // `response.usage` (Responses events), `message.usage` (Anthropic message_start), `usageMetadata` (Gemini).
