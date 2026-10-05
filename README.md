@@ -423,6 +423,8 @@ and `:streamGenerateContent`, forces a tool through `toolConfig.functionCallingC
 proxies every other `/v1beta/*` path unchanged. Your API key travels as the client sent it, in the
 `x-goog-api-key` header or the `key` query parameter.
 
+Gemini output totals include hidden thinking tokens, which the dashboard also shows as reasoning.
+
 This covers clients that use a **Gemini API key**. A Gemini CLI signed in with a Google account
 talks to a different Google service and does not go through the gateway. The Gemini path has unit
 tests but has not yet been run against the real API.
@@ -497,6 +499,13 @@ function-call `Part` and its `thoughtSignature`. The gateway forwards the provid
 envelope and `Part`s, preserving `thoughtSignature` for later turns. It does not create signatures.
 Provider SSE events pass through when `?alt=sse` is present. Other internal calls, including account
 and model management, pass through untouched with the client's headers.
+
+Controls with `agy` 1.2.17, OAuth on `daily-cloudcode-pa.googleapis.com` and
+`gemini-3.8-flash-high` found that `NONE` still generated a function call and `ANY` generated a
+function outside `allowedFunctionNames`, including with fresh request and session identifiers.
+The requests completed with HTTP 200 and `STOP`. A gateway decision of `forced` therefore does
+not prove that this backend followed the selected tool, and these checks do not establish routing
+savings. Use `jev-agy --routing off` for a baseline comparison.
 
 Real API checks used Node 24.21, `agy` 1.2.8 with OAuth to
 `daily-cloudcode-pa.googleapis.com`, and `gemini-3.8-flash-high`. All nine OpenRouter calls to

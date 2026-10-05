@@ -13,7 +13,7 @@ export interface Usage {
   cached: number;
   /** Part of `input` written to the prompt cache (Anthropic only; billed at a premium). */
   cacheWrite: number;
-  /** Part of `output` spent on hidden reasoning, when the provider says (OpenAI). */
+  /** Part of `output` spent on hidden reasoning, when the provider reports it. */
   reasoning: number;
 }
 
@@ -39,7 +39,8 @@ function merge(into: Partial<Usage>, raw: Raw): void {
   } else if ("promptTokenCount" in raw || "candidatesTokenCount" in raw) {
     // Google Gemini API (usageMetadata)
     into.input = num(raw.promptTokenCount);
-    into.output = num(raw.candidatesTokenCount);
+    into.reasoning = num(raw.thoughtsTokenCount);
+    into.output = num(raw.candidatesTokenCount) + into.reasoning;
     into.cached = num(raw.cachedContentTokenCount);
   } else {
     // Responses API — or Anthropic's message_delta, which only updates the output count.
