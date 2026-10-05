@@ -321,21 +321,11 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;
   });
-  app.all("/v1internal:*", async (c) => {
-    const response = await forward(c.req.raw, config, fetchImpl);
-    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
-    return response;
-  });
-  app.all("/v1internal/*", async (c) => {
-    const response = await forward(c.req.raw, config, fetchImpl);
-    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
-    return response;
-  });
 
-  // The rest of exa (seat management, model catalogue, analytics) is proxied opaque. Only exa:
-  // any other unknown path stays a 404 here rather than reaching upstream with the client's key.
+  // Hono's routers interpret `:*` differently, so Cloud Code's prefix is checked literally here.
+  // Only exa and Cloud Code management calls are proxied; unknown prefixes keep the client's key local.
   app.all("/*", async (c) => {
-    if (!c.req.path.startsWith("/exa.")) return c.notFound();
+    if (!c.req.path.startsWith("/exa.") && !/^\/v1internal([:/]|$)/.test(c.req.path)) return c.notFound();
     const response = await forward(c.req.raw, config, fetchImpl);
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;
