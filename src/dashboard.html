@@ -175,6 +175,7 @@ const REASONS = {
   malformed_tools: ["Jev not asked", "A tool in the roster has no name or no type; upstream gets to reject it."],
   unsafe_tool_name: ["Jev not asked", "A tool's name has spaces, quotes or brackets in it. No provider accepts such a name, and the router won't repeat it to a model."],
   unreadable_request: ["Jev not asked", "The body was JSON but not the shape this API documents; upstream gets to reject it."],
+  malformed_envelope: ["Jev not asked", "The Cloud Code request envelope was unreadable; the original body went upstream."],
   too_many_tools: ["Jev not asked", "The tool roster is larger than the router can shortlist."],
   duplicate_tool_names: ["Jev not asked", "Two tools share a name."],
   reserved_tool_name: ["Jev not asked", "A tool is named no_tool_needed, which the router reserves."],

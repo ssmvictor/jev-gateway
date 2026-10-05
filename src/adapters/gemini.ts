@@ -59,7 +59,6 @@ export interface GeminiRequest {
   [key: string]: unknown;
 }
 
-/** Google Gemini API and Cloud Code (`/v1beta/models/...`, `/v1internal:streamGenerateContent`). */
 function innerRequest(req: GeminiRequest | undefined): GeminiRequest | undefined {
   if (!req || !("request" in req)) return req;
   const inner = req.request;
@@ -109,15 +108,15 @@ function isGeminiTool(value: unknown): value is GeminiTool {
 function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { skip: string } {
   const inner = innerRequest(req);
   if (!inner) return { skip: "malformed_envelope" };
-  const rawContents: unknown = req.contents ?? inner.contents;
+  const rawContents: unknown = inner.contents;
   if (rawContents === undefined) return { skip: "no_messages" };
   if (!Array.isArray(rawContents) || !rawContents.every(isGeminiContent)) return { skip: "unreadable_request" };
   const contents = rawContents as GeminiContent[];
-  const toolConfig = req.toolConfig ?? inner.toolConfig;
+  const toolConfig = inner.toolConfig;
   const config = toolConfig?.functionCallingConfig;
   // A caller that lists allowedFunctionNames has already narrowed the choice: Jev picks among those.
   const allowed = config?.allowedFunctionNames?.length ? new Set(config.allowedFunctionNames) : undefined;
-  const rawTools: unknown = req.tools ?? inner.tools ?? [];
+  const rawTools: unknown = inner.tools ?? [];
   if (!Array.isArray(rawTools) || !rawTools.every(isGeminiTool)) return { skip: "unreadable_request" };
   const tools = rawTools as GeminiTool[];
   const rawDecls = tools.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
@@ -126,7 +125,7 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
   // declarations. Jev sees them so it isn't blind to them, but they can't be forced by name.
   const hosted = tools.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));
 
-  const systemInstruction: unknown = req.systemInstruction ?? inner.systemInstruction;
+  const systemInstruction: unknown = inner.systemInstruction;
   if (
     systemInstruction !== undefined &&
     (!isRecord(systemInstruction) ||
@@ -144,21 +143,20 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
 
   const turns: RouterInput["turns"] = [];
   for (const content of contents) {
-    if (!content || typeof content !== "object") continue;
     const role = content.role === "model" ? "assistant" : "user";
     const textParts: string[] = [];
     const toolCalls: Array<{ tool: string; arguments: string }> = [];
 
     for (const part of content.parts ?? []) {
-      if (!part || typeof part !== "object" || part.thought === true) continue;
-      if (part.text && typeof part.text === "string") {
+      if (part.thought === true) continue;
+      if (part.text) {
         textParts.push(part.text);
-      } else if (part.functionCall && typeof part.functionCall === "object" && typeof part.functionCall.name === "string") {
+      } else if (part.functionCall) {
         toolCalls.push({
           tool: part.functionCall.name,
           arguments: truncate(JSON.stringify(part.functionCall.args ?? {}), maxMessageChars),
         });
-      } else if (part.functionResponse && typeof part.functionResponse === "object" && typeof part.functionResponse.name === "string") {
+      } else if (part.functionResponse) {
         turns.push({
           role: "tool_result",
           tool: part.functionResponse.name,
@@ -259,11 +257,23 @@ function metadata(req: GeminiRequest | undefined, url: URL) {
   const internal = /^\/v1internal:(generateContent|streamGenerateContent)$/.exec(url.pathname);
   const inner = innerRequest(req);
   const model = typeof inner?.model === "string" ? inner.model : beta?.[1];
-  const tools = Array.isArray(inner?.tools) ? inner.tools.length : undefined;
+  const toolGroups = Array.isArray(inner?.tools) ? inner.tools.filter(isGeminiTool) : undefined;
+  const config = inner?.toolConfig?.functionCallingConfig;
+  const rawAllowedNames: unknown = config?.allowedFunctionNames;
+  const allowedNames =
+    Array.isArray(rawAllowedNames) && rawAllowedNames.every((name): name is string => typeof name === "string")
+      ? rawAllowedNames
+      : undefined;
+  const allowed = allowedNames?.length ? new Set(allowedNames) : undefined;
+  const tools = toolGroups
+    ? toolGroups.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name)).length +
+      new Set(toolGroups.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"))).size
+    : undefined;
   const stream = beta?.[2] === "streamGenerateContent" || internal?.[1] === "streamGenerateContent";
   return { model, tools, stream };
 }
 
+/** Google Gemini API and Cloud Code (`/v1beta/models/...`, `/v1internal:streamGenerateContent`). */
 export const geminiAdapter: Adapter<GeminiRequest> = {
   toInput,
   apply,

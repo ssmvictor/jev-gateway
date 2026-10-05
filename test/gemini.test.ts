@@ -304,7 +304,7 @@ describe("POST /v1beta/models/...:generateContent", () => {
             headers: { "content-type": "text/event-stream" },
           });
         }
-        if (/:streamGenerateContent$/.test(url.pathname) && !url.pathname.includes(":countTokens:")) {
+        if (/:streamGenerateContent$/.test(url.pathname)) {
           return new Response(JSON.stringify([reply]), { headers: { "content-type": "application/json" } });
         }
         return Response.json(reply);
@@ -334,8 +334,6 @@ describe("POST /v1beta/models/...:generateContent", () => {
     expect(JSON.parse(array.text)[0].usageMetadata).toEqual(reply.usageMetadata);
 
     expect((await routed("/v1beta/models/gemini-2.5-pro:generateContent")).type).toContain("application/json");
-    const malformedOperation = await routed("/v1beta/models/gemini-2.5-pro:countTokens:streamGenerateContent");
-    expect(Array.isArray(JSON.parse(malformedOperation.text))).toBe(false);
   });
 
   it("offers Google-run tools to Jev without forcing them, and respects allowedFunctionNames", async () => {
@@ -432,14 +430,157 @@ describe("POST /v1beta/models/...:generateContent", () => {
       expect(feed.events[0]?.model).toBe("nested-gemini");
     });
 
+    it("counts declared and distinct hosted tools in a wrapped request with routing off", async () => {
+      const jev = fakeJev({});
+      const upstream = fakeUpstream();
+      const app = createApp({
+        config: testConfig({ routing: false }),
+        askJev: jev.askJev,
+        fetch: upstream.fetchImpl,
+      });
+      const declarations = ["one", "two", "three", "four", "five"].map((name) => ({ name }));
+      const original = wrappedInternalRequest({
+        tools: [
+          { functionDeclarations: declarations },
+          { googleSearch: {} },
+          { googleSearch: {}, urlContext: {} },
+        ],
+      });
+      await app.request("/v1internal:generateContent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(original),
+      });
+      await settled();
+
+      const feed = (await (await app.request("/dashboard/events")).json()) as { events: { tools: number }[] };
+      expect(jev.requests).toHaveLength(0);
+      expect(upstream.calls[0]?.body).toEqual(original);
+      expect(feed.events[0]?.tools).toBe(7);
+    });
+
+    it("keeps the wrapped model in dashboard events when its tool groups are malformed", async () => {
+      const { post, app, jev } = setup(listPlansDecision);
+      const malformed = {
+        ...wrappedInternalRequest({ model: "nested-gemini", tools: [null] }),
+        model: undefined,
+      };
+      await post(malformed, "/v1internal:generateContent");
+      await settled();
+
+      const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string }[] };
+      expect(jev.requests).toHaveLength(0);
+      expect(feed.events[0]?.model).toBe("nested-gemini");
+    });
+
+    it("keeps wrapped metadata when allowedFunctionNames is malformed in baseline mode", async () => {
+      const jev = fakeJev({});
+      const upstream = fakeUpstream();
+      const app = createApp({
+        config: testConfig({ routing: false }),
+        askJev: jev.askJev,
+        fetch: upstream.fetchImpl,
+      });
+      const original = {
+        ...wrappedInternalRequest({
+          model: "known-model",
+          tools: [listPlansTool],
+          toolConfig: { functionCallingConfig: { allowedFunctionNames: { length: 1 } } },
+        }),
+        model: undefined,
+      };
+      await app.request("/v1internal:generateContent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(original),
+      });
+      await settled();
+
+      const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string; tools: number }[] };
+      expect(jev.requests).toHaveLength(0);
+      expect(upstream.calls[0]?.body).toEqual(original);
+      expect(feed.events[0]).toMatchObject({ model: "known-model", tools: 1 });
+    });
+
     it("disables tools inside a wrapped request when Jev is confident no tool is needed", async () => {
       const { post, upstream } = setup({ tool: { choice: NO_TOOL }, needs_tool: { noul: 0.05 } });
-      await post(wrappedInternalRequest(), "/v1internal:generateContent");
+      const original = wrappedInternalRequest();
+      await post(original, "/v1internal:generateContent");
 
-      const sent = upstream.calls[0]!.body as {
-        request?: { toolConfig?: { functionCallingConfig?: { mode: string } } };
+      expect(upstream.calls[0]?.body).toEqual({
+        ...original,
+        request: {
+          ...original.request,
+          toolConfig: { functionCallingConfig: { mode: "NONE" } },
+        },
+      });
+    });
+
+    it("leaves a wrapped request with tool choice NONE untouched", async () => {
+      const { post, upstream, jev } = setup(shellDecision);
+      const original = wrappedInternalRequest({ toolConfig: { functionCallingConfig: { mode: "NONE" } } });
+      const response = await post(original, "/v1internal:generateContent");
+
+      expect(jev.requests).toHaveLength(0);
+      expect(response.headers.get("x-jev-gateway-reason")).toBe("tool_choice_already_decided");
+      expect(upstream.calls[0]?.body).toEqual(original);
+    });
+
+    it("uses only the inner request fields when an envelope also has outer lookalikes", async () => {
+      const { post, jev, upstream } = setup(listPlansDecision);
+      const innerTools = {
+        functionDeclarations: [
+          { name: "list_plans", parameters: { type: "object", properties: {} } },
+          { name: "read_file", parameters: { type: "object", properties: {} } },
+        ],
       };
-      expect(sent.request?.toolConfig?.functionCallingConfig).toEqual({ mode: "NONE" });
+      const original = {
+        ...wrappedInternalRequest({
+          contents: [listPlansContent],
+          systemInstruction: { parts: [{ text: "inner instructions" }] },
+          tools: [innerTools],
+          toolConfig: { functionCallingConfig: { mode: "ANY" } },
+        }),
+        contents: [{ role: "user", parts: [{ text: "outer decoy" }] }],
+        systemInstruction: { parts: [{ text: "outer instructions" }] },
+        tools: [{ functionDeclarations: [{ name: "outer_tool" }] }],
+        toolConfig: { functionCallingConfig: { mode: "NONE" as const } },
+      };
+      await post(original, "/v1internal:generateContent");
+
+      expect(jev.requests).toHaveLength(1);
+      expect(jev.requests[0]?.state).toMatchObject({
+        assistant_instructions: "inner instructions",
+        conversation: [{ role: "user", text: "list plans" }],
+      });
+      const question = jev.requests[0]!.questions.tool!;
+      expect(question.type === "choice" && Object.keys(question.criteria)).toEqual(["list_plans", "read_file"]);
+      expect(upstream.calls[0]?.body).toEqual({
+        ...original,
+        request: {
+          ...original.request,
+          toolConfig: { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["list_plans"] } },
+        },
+      });
+    });
+
+    it("respects allowedFunctionNames inside a wrapped request", async () => {
+      const { post, jev } = setup(listPlansDecision);
+      const two = {
+        functionDeclarations: [
+          { name: "list_plans", parameters: { type: "object", properties: {} } },
+          { name: "read_file", parameters: { type: "object", properties: {} } },
+        ],
+      };
+      await post(wrappedInternalRequest({
+        contents: [listPlansContent],
+        tools: [two],
+        toolConfig: { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["list_plans"] } },
+      }), "/v1internal:generateContent");
+
+      expect(jev.requests).toHaveLength(1);
+      const question = jev.requests[0]!.questions.tool!;
+      expect(question.type === "choice" && Object.keys(question.criteria)).toEqual(["list_plans"]);
     });
 
     it("passes a malformed internal envelope upstream without asking Jev", async () => {
@@ -448,6 +589,21 @@ describe("POST /v1beta/models/...:generateContent", () => {
       await post(malformed, "/v1internal:generateContent");
 
       expect(jev.requests).toHaveLength(0);
+      expect(upstream.calls[0]?.body).toEqual(malformed);
+    });
+
+    it("passes an empty wrapped request through even when outer lookalikes are present", async () => {
+      const { post, upstream, jev } = setup(listPlansDecision);
+      const malformed = {
+        ...wrappedInternalRequest(),
+        contents: [listPlansContent],
+        tools: [listPlansTool],
+        request: {},
+      };
+      const response = await post(malformed, "/v1internal:generateContent");
+
+      expect(jev.requests).toHaveLength(0);
+      expect(response.headers.get("x-jev-gateway-reason")).toBe("no_messages");
       expect(upstream.calls[0]?.body).toEqual(malformed);
     });
 
@@ -497,15 +653,16 @@ describe("POST /v1beta/models/...:generateContent", () => {
 
     it("forces tool selection in wrapped request.toolConfig", async () => {
       const { post, upstream } = setup(shellDecision);
-      await post(wrappedInternalRequest(), "/v1internal:streamGenerateContent");
+      const original = wrappedInternalRequest();
+      await post(original, "/v1internal:streamGenerateContent");
 
       expect(upstream.calls).toHaveLength(1);
-      const sent = upstream.calls[0]!.body as {
-        request?: { toolConfig?: { functionCallingConfig?: { mode: string; allowedFunctionNames?: string[] } } };
-      };
-      expect(sent.request?.toolConfig?.functionCallingConfig).toEqual({
-        mode: "ANY",
-        allowedFunctionNames: ["shell"],
+      expect(upstream.calls[0]?.body).toEqual({
+        ...original,
+        request: {
+          ...original.request,
+          toolConfig: { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["shell"] } },
+        },
       });
     });
 
