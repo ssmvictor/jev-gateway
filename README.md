@@ -500,8 +500,8 @@ envelope and `Part`s, preserving `thoughtSignature` for later turns. It does not
 Provider SSE events pass through when `?alt=sse` is present. Other internal calls, including account
 and model management, pass through untouched with the client's headers.
 
-Controls with `agy` 1.2.17, OAuth on `daily-cloudcode-pa.googleapis.com` and
-`gemini-3.8-flash-high` found that `NONE` still generated a function call and `ANY` generated a
+Controls with `agy` 1.2.17, OAuth on `daily-cloudcode-pa.googleapis.com` and the Low, Medium and
+High variants of Gemini 3.8 Flash found that `NONE` still generated a function call and `ANY` generated a
 function outside `allowedFunctionNames`, including with fresh request and session identifiers.
 The requests completed with HTTP 200 and `STOP`. A gateway decision of `forced` therefore does
 not prove that this backend followed the selected tool, and these checks do not establish routing
