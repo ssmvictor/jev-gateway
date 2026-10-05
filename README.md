@@ -427,6 +427,9 @@ This covers clients that use a **Gemini API key**. A Gemini CLI signed in with a
 talks to a different Google service and does not go through the gateway. The Gemini path has unit
 tests but has not yet been run against the real API.
 
+When Jev selects a function, Gemini uses `forced` mode so Google generates the signed function call.
+`direct` is unavailable for Gemini, regardless of `JEV_DIRECT_CALLS`.
+
 ## Using it with Devin
 
 `jev-devin` runs the Devin CLI with `WINDSURF_API_SERVER_URL` pointed at a gateway on port 8792,
@@ -469,17 +472,20 @@ The launcher points `CLOUD_CODE_URL`, `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_B
 for that process without writing the client's settings. It passes Antigravity arguments through,
 including `--mode plan`. Real plan-mode sessions with `agy` 1.2.8 reported `INTERNAL (code 500)` and
 ended with CLI `status: ERROR`, both through the gateway and with `agy` directly. The cause remains
-unresolved. A streaming HTTP 200 does not by itself mean the CLI session completed successfully.
+unresolved. `--disable-slash-commands` prevents an effective plan-mode test, so do not combine it
+with plan mode when validating this behavior. A streaming HTTP 200 does not by itself mean the CLI
+session completed successfully.
 
 To compare with Jev disabled, run `jev-agy --routing off`; requests still pass through the gateway
 to Google. Running `agy` directly bypasses the gateway.
 
-The upstream follows the client's provider:
+The upstream follows `settings.json`'s `modelProvider`. `GEMINI_API_KEY` supplies credentials for
+Gemini mode; its presence alone does not select that provider.
 
 | Configuration | Upstream |
 | --- | --- |
 | Google account, or no readable provider setting | `https://daily-cloudcode-pa.googleapis.com` |
-| `GEMINI_API_KEY` is set, or `settings.json` has `"modelProvider": "gemini"` | `https://generativelanguage.googleapis.com` |
+| `settings.json` has `"modelProvider": "gemini"` | `https://generativelanguage.googleapis.com` |
 | `JEV_ANTIGRAVITY_UPSTREAM_BASE_URL` is set | That URL, overriding provider detection |
 
 The settings file is `~/.gemini/antigravity-cli/settings.json`. Change the port with
@@ -613,7 +619,7 @@ list. The ones worth knowing:
 | `JEV_PROVIDER` | whichever key is set | `typesafe`, `openrouter`, `vercel` or `opencode` |
 | `JEV_MIN_CONFIDENCE` | `0.7` | Below this confidence, the LLM decides. Lower it to route more, raise it to be more careful |
 | `JEV_ARG_MIN_CERTAINTY` | `0.8` | Every argument must reach this for a `direct` answer |
-| `JEV_DIRECT_CALLS` | `true` | Set to `false` so the gateway never answers without the LLM |
+| `JEV_DIRECT_CALLS` | `true` | Set to `false` so the gateway never answers without the LLM; Gemini never synthesizes calls and uses `forced` when Jev selects a function |
 | `JEV_ROUTING` | `on` | Set to `off` to start in baseline mode |
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
 | `ARGS_MODEL` | unset | A cheaper model for `forced` calls in Chat Completions, Responses and Messages; ignored for Gemini |
