@@ -42,6 +42,18 @@ function antigravitySettings(content?: string) {
   return path;
 }
 
+function isolatedLauncherEnv() {
+  const home = mkdtempSync(join(tmpdir(), "jev-launcher-home-"));
+  temporaryDirs.push(home);
+  return {
+    PATH: process.env.PATH,
+    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    HOME: home,
+    USERPROFILE: home,
+    JEV_SKIP_PROJECT_ENV: "1",
+  };
+}
+
 beforeEach(() => {
   for (const key of managedEnv) {
     savedEnv[key] = process.env[key];
@@ -157,13 +169,23 @@ describe("jev-opencode entrypoint", () => {
   });
 
   it("--gateway-help describes the opencode launcher without starting anything", () => {
-    const out = execFileSync(process.execPath, [launcherBin, "--gateway-help"], { encoding: "utf8", timeout: 30_000 });
+    const env = isolatedLauncherEnv();
+    const out = execFileSync(process.execPath, [launcherBin, "--gateway-help"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env,
+    });
     expect(out).toContain("jev-opencode: opencode with tool selection routed through Jev");
     expect(out).toContain("--print-config");
+    expect(out).toContain(join(env.HOME, ".jev-gateway", ".env"));
   });
 
   it("--print-config prints the gateway-rooted provider config without starting anything", () => {
-    const out = execFileSync(process.execPath, [launcherBin, "--print-config"], { encoding: "utf8", timeout: 30_000 });
+    const out = execFileSync(process.execPath, [launcherBin, "--print-config"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: isolatedLauncherEnv(),
+    });
     expect(out).toContain("http://127.0.0.1:8791/v1");
     expect(out).toContain("jev-gateway");
   });
@@ -240,13 +262,19 @@ describe("jev-antigravity spec", () => {
     expect(antigravity.upstream(path)).toBe("https://generativelanguage.googleapis.com");
   });
 
-  it("uses Gemini when GEMINI_API_KEY is set, ahead of the settings provider", () => {
+  it("keeps the default Cloud Code provider when GEMINI_API_KEY is set", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
-    const path = antigravitySettings(JSON.stringify({ modelProvider: "cloudcode" }));
+    const path = antigravitySettings();
+    expect(antigravity.upstream(path)).toBe("https://daily-cloudcode-pa.googleapis.com");
+  });
+
+  it("uses Gemini when settings select that provider and GEMINI_API_KEY is set", () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const path = antigravitySettings(JSON.stringify({ modelProvider: "gemini" }));
     expect(antigravity.upstream(path)).toBe("https://generativelanguage.googleapis.com");
   });
 
-  it("gives the explicit upstream override precedence over the key and settings", () => {
+  it("gives the explicit upstream override precedence over the settings provider", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL = "https://custom-cloudcode.test";
     const path = antigravitySettings(JSON.stringify({ modelProvider: "gemini" }));
@@ -267,10 +295,11 @@ describe("jev-antigravity spec", () => {
     });
   });
 
-  it("prints permanent wiring help for both plan mode and Gemini key", () => {
+  it("prints permanent wiring help without recommending the broken plan mode", () => {
     const help = antigravity.configHelp("http://127.0.0.1:8787");
     expect(help).toContain("CLOUD_CODE_URL=http://127.0.0.1:8787 agy");
-    expect(help).toContain("--mode plan");
+    expect(help).not.toContain("--mode plan");
+    expect(help).toContain('settings.json modelProvider: "gemini" and GEMINI_API_KEY set');
     expect(help).toContain("GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787 agy");
   });
 });
@@ -285,13 +314,23 @@ describe("jev-antigravity entrypoint", () => {
   });
 
   it("--gateway-help describes the antigravity launcher without starting anything", () => {
-    const out = execFileSync(process.execPath, [agyLauncherBin, "--gateway-help"], { encoding: "utf8", timeout: 30_000 });
+    const env = isolatedLauncherEnv();
+    const out = execFileSync(process.execPath, [agyLauncherBin, "--gateway-help"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env,
+    });
     expect(out).toContain("jev-antigravity: agy with tool selection routed through Jev");
     expect(out).toContain("--print-config");
+    expect(out).toContain(join(env.HOME, ".jev-gateway", ".env"));
   });
 
   it("--print-config prints the antigravity environment configuration without starting anything", () => {
-    const out = execFileSync(process.execPath, [agyLauncherBin, "--print-config"], { encoding: "utf8", timeout: 30_000 });
+    const out = execFileSync(process.execPath, [agyLauncherBin, "--print-config"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: isolatedLauncherEnv(),
+    });
     expect(out).toContain("CLOUD_CODE_URL=http://127.0.0.1:8795 agy");
   });
 });

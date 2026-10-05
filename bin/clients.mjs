@@ -341,12 +341,9 @@ export const gemini = {
     `#   or endpoint: ${origin}/v1beta\n`,
 };
 
-/** Antigravity CLI talks to Cloud Code when logged in with a Google account/plan, or Gemini when configured with an API key. */
+/** Antigravity CLI uses Gemini when settings.json selects that provider; otherwise it uses Cloud Code. */
 function antigravityUpstream(settingsPath = join(homedir(), ".gemini", "antigravity-cli", "settings.json")) {
   if (process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL) return process.env.JEV_ANTIGRAVITY_UPSTREAM_BASE_URL;
-  if (process.env.GEMINI_API_KEY) {
-    return "https://generativelanguage.googleapis.com";
-  }
   try {
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
     if (settings.modelProvider === "gemini") {
@@ -365,9 +362,9 @@ export const antigravity = {
   defaultPort: 8795,
   upstream: antigravityUpstream,
   upstreamHelp:
-    "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL   where Antigravity traffic goes; default follows your settings.json:\n" +
-    "                                      Google plan/account → https://daily-cloudcode-pa.googleapis.com\n" +
-    "                                      Gemini API key      → https://generativelanguage.googleapis.com",
+    "JEV_ANTIGRAVITY_UPSTREAM_BASE_URL   where Antigravity traffic goes; default follows settings.json:\n" +
+    "                                      missing/cloudcode provider → https://daily-cloudcode-pa.googleapis.com\n" +
+    "                                      modelProvider=gemini       → https://generativelanguage.googleapis.com",
   env: (origin) => ({
     CLOUD_CODE_URL: origin,
     GOOGLE_GEMINI_BASE_URL: origin,
@@ -376,8 +373,6 @@ export const antigravity = {
   configHelp: (origin) =>
     `# Keep the gateway running (jev-antigravity --start), then either:\n` +
     `#   CLOUD_CODE_URL=${origin} agy\n` +
-    `# or for plan mode:\n` +
-    `#   CLOUD_CODE_URL=${origin} agy --mode plan\n` +
-    `# or with Gemini API key:\n` +
+    `# or with settings.json modelProvider: "gemini" and GEMINI_API_KEY set:\n` +
     `#   GOOGLE_GEMINI_BASE_URL=${origin} agy\n`,
 };
