@@ -215,8 +215,8 @@ function apply(req: GeminiRequest, decision: Parameters<Adapter<GeminiRequest>["
   return clone;
 }
 
-function directJson(req: GeminiRequest, call: DirectCall): object {
-  const candidate = {
+function directJson(_req: GeminiRequest, call: DirectCall): object {
+  return {
     candidates: [
       {
         content: {
@@ -237,10 +237,6 @@ function directJson(req: GeminiRequest, call: DirectCall): object {
     // No LLM ran: Jev's input tokens are the whole cost, and nothing was generated.
     usageMetadata: { promptTokenCount: call.inputTokens, candidatesTokenCount: 0, totalTokenCount: call.inputTokens },
   };
-  if (req.request && typeof req.request === "object") {
-    return { response: candidate };
-  }
-  return candidate;
 }
 
 /** `streamGenerateContent` returns SSE only when its URL asks for `alt=sse`; otherwise it is a JSON array. */
@@ -251,10 +247,9 @@ function directStream(req: GeminiRequest, call: DirectCall, url: URL) {
     : { body: `[${chunk}]`, contentType: "application/json" };
 }
 
-/** Model and streaming metadata live in exact generation paths or the Cloud Code envelope. */
+/** Model metadata lives in the Gemini path or the Cloud Code envelope. */
 function metadata(req: GeminiRequest | undefined, url: URL) {
-  const beta = /^\/v1beta\/models\/([^/:]+):(generateContent|streamGenerateContent)$/.exec(url.pathname);
-  const internal = /^\/v1internal:(generateContent|streamGenerateContent)$/.exec(url.pathname);
+  const beta = /^\/v1beta\/models\/([^/:]+)(?::|$)/.exec(url.pathname);
   const inner = innerRequest(req);
   const model = typeof inner?.model === "string" ? inner.model : beta?.[1];
   const toolGroups = Array.isArray(inner?.tools) ? inner.tools.filter(isGeminiTool) : undefined;
@@ -269,8 +264,7 @@ function metadata(req: GeminiRequest | undefined, url: URL) {
     ? toolGroups.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name)).length +
       new Set(toolGroups.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"))).size
     : undefined;
-  const stream = beta?.[2] === "streamGenerateContent" || internal?.[1] === "streamGenerateContent";
-  return { model, tools, stream };
+  return { model, tools };
 }
 
 /** Google Gemini API and Cloud Code (`/v1beta/models/...`, `/v1internal:streamGenerateContent`). */

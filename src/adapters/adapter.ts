@@ -1,11 +1,10 @@
 import type { Decision } from "../decide.js";
 import type { DirectCall, RouterInput } from "../types.js";
 
-/** Metadata the gateway uses for logging and direct response selection. */
+/** Metadata the gateway uses for logging. */
 export interface RequestMetadata {
   model?: string;
   tools?: number;
-  stream?: boolean;
 }
 
 /** Translates one client wire format to and from the router's neutral shapes. */

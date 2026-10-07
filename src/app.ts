@@ -195,7 +195,7 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
       try {
         const call = { tool: decision.tool, args: decision.args, inputTokens: decision.jev?.inputTokens ?? 0 };
         const headers = decisionHeaders(decision);
-        const streamed = (requestMetadata.stream ?? req.stream) ? adapter.directStream(req, call, url) : undefined;
+        const streamed = req.stream ? adapter.directStream(req, call, url) : undefined;
         const json = streamed === undefined ? adapter.directJson(req, call) : undefined;
         log({ ...entry, ...decision });
         if (streamed === undefined) return c.json(json, 200, headers);
@@ -316,12 +316,6 @@ export function createApp({ config, askJev, fetch: fetchImpl = fetch, log: write
     dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
     return response;
   });
-  app.all("/v1beta1/*", async (c) => {
-    const response = await forward(c.req.raw, config, fetchImpl);
-    dump?.("other", { method: c.req.method, path: c.req.path, headers: redactHeaders(c.req.raw.headers), status: response.status });
-    return response;
-  });
-
   // Hono's routers interpret `:*` differently, so Cloud Code's prefix is checked literally here.
   // Only exa and Cloud Code management calls are proxied; unknown prefixes keep the client's key local.
   app.all("/*", async (c) => {

@@ -250,6 +250,26 @@ describe("POST /v1/chat/completions", () => {
 });
 
 describe("gateway", () => {
+  it("does not proxy unknown /v1beta1 paths with the client's credentials", async () => {
+    const upstream = fakeUpstream();
+    const jev = fakeJev({});
+    const app = createApp({
+      config: testConfig({ upstreamBaseUrl: "https://cloudcode.test" }),
+      askJev: jev.askJev,
+      fetch: upstream.fetchImpl,
+    });
+
+    const response = await app.request("/v1beta1/projects/test/locations/global", {
+      method: "POST",
+      headers: { authorization: "Bearer client-oauth-token" },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(404);
+    expect(upstream.calls).toHaveLength(0);
+    expect(jev.requests).toHaveLength(0);
+  });
+
   it("proxies other /v1 routes and swaps in the upstream key", async () => {
     const upstream = fakeUpstream({ data: [] });
     const app = createApp({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { geminiAdapter } from "../src/adapters/gemini.js";
 import { NO_TOOL } from "../src/questions.js";
 import { readUsage } from "../src/usage.js";
 import { fakeJev, fakeUpstream, settled, testConfig } from "./helpers.js";
@@ -284,6 +285,29 @@ describe("POST /v1beta/models/...:generateContent", () => {
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=abc",
       "https://generativelanguage.googleapis.com/v1beta/models?pageSize=5",
     ]);
+  });
+
+  it("records model and tools for countTokens without asking Jev", async () => {
+    const jev = fakeJev(shellDecision);
+    const upstream = fakeUpstream();
+    const app = createApp({
+      config: testConfig(),
+      askJev: jev.askJev,
+      fetch: upstream.fetchImpl,
+    });
+    const body = { contents: [listPlansContent] };
+    const response = await app.request("/v1beta/models/gemini-2.5-pro:countTokens", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await settled();
+
+    const feed = (await (await app.request("/dashboard/events")).json()) as { events: { model?: string; tools: number }[] };
+    expect(response.status).toBe(200);
+    expect(feed.events[0]).toMatchObject({ model: "gemini-2.5-pro", tools: 0 });
+    expect(jev.requests).toHaveLength(0);
+    expect(upstream.calls[0]?.body).toEqual(body);
   });
 
   it("preserves provider stream formats and reads the model from Gemini paths", async () => {
@@ -798,18 +822,12 @@ describe("POST /v1beta/models/...:generateContent", () => {
         headers,
         body: JSON.stringify(geminiRequest()),
       });
-      await app.request("/v1beta1/projects/test-project/locations/global", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(geminiRequest()),
-      });
 
       expect(calls.map((c) => c.url)).toEqual([
         "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
         "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         "https://daily-cloudcode-pa.googleapis.com/v1internal/models/gemini-3.8-flash-high",
         "https://daily-cloudcode-pa.googleapis.com/v1beta/projects/test-project/locations/global",
-        "https://daily-cloudcode-pa.googleapis.com/v1beta1/projects/test-project/locations/global",
       ]);
       for (const call of calls) {
         expect(call.headers.get("authorization")).toBe(headers.authorization);
@@ -820,7 +838,6 @@ describe("POST /v1beta/models/...:generateContent", () => {
       expect(jev.requests).toHaveLength(0);
       expect(calls[2]?.body).toEqual(geminiRequest());
       expect(calls[3]?.body).toEqual(geminiRequest());
-      expect(calls[4]?.body).toEqual(geminiRequest());
     });
 
     it("auto-detects wrapped internal request in /router/decide", async () => {
@@ -836,5 +853,30 @@ describe("POST /v1beta/models/...:generateContent", () => {
       expect(decision.mode).toBe("forced");
       expect(decision.tool).toBe("shell");
     });
+  });
+});
+
+describe("Gemini direct response methods", () => {
+  const req = { request: geminiRequest() };
+  const call = { tool: "shell", args: { command: "ls" }, inputTokens: 10 };
+
+  it("returns an unwrapped provider response for a Cloud Code request", () => {
+    expect(geminiAdapter.directJson(req, call)).toMatchObject({
+      candidates: [{ content: { role: "model", parts: [{ functionCall: { name: "shell", args: { command: "ls" } } }] } }],
+    });
+  });
+
+  it("keeps direct stream answers in SSE or JSON-array format", () => {
+    const array = geminiAdapter.directStream(req, call, new URL("https://gateway.test/v1internal:streamGenerateContent"));
+    const sse = geminiAdapter.directStream(req, call, new URL("https://gateway.test/v1internal:streamGenerateContent?alt=sse"));
+
+    expect(typeof array).toBe("object");
+    if (typeof array !== "string") {
+      expect(array.contentType).toBe("application/json");
+      const body = typeof array.body === "string" ? array.body : Buffer.from(array.body).toString("utf8");
+      expect(JSON.parse(body)[0]).toHaveProperty("candidates");
+    }
+    expect(typeof sse).toBe("string");
+    if (typeof sse === "string") expect(JSON.parse(sse.replace(/^data: /, ""))).toHaveProperty("candidates");
   });
 });
