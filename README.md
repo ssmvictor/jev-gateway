@@ -462,24 +462,24 @@ stream, after an HTTP 200, so a refused `hint` reaches Devin as a failed turn. S
 
 ## Using it with Antigravity CLI
 
-`jev-agy` (or `jev-antigravity`) runs Antigravity CLI (`agy`) through a gateway on port 8795.
+On Cloud Code with Gemini 3.8 Flash, controls using `agy` 1.2.17 showed that `NONE` still
+produced a function call and `ANY` called outside `allowedFunctionNames`. Routing still calls Jev
+for eligible requests, adding Jev call cost and up to `JEV_TIMEOUT_MS` of delay without
+demonstrated routing benefit. A dashboard `forced` decision records a requested tool rewrite; it does not prove
+Cloud Code enforced it.
 
-Run Antigravity through the gateway:
+For a provider measurement without Jev decisions, run `jev-agy --routing off`. This changes gateway
+state and exits without starting Antigravity. Run `jev-agy` next to start the client through the
+gateway:
 
 ```bash
+jev-agy --routing off
 jev-agy
 ```
 
-The launcher points `CLOUD_CODE_URL`, `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_BASE` at the gateway
-for that process without writing the client's settings. It passes Antigravity arguments through,
-including `--mode plan`. Real plan-mode sessions with `agy` 1.2.8 reported `INTERNAL (code 500)` and
-ended with CLI `status: ERROR`, both through the gateway and with `agy` directly. The cause remains
-unresolved. `--disable-slash-commands` prevents an effective plan-mode test, so do not combine it
-with plan mode when validating this behavior. A streaming HTTP 200 does not by itself mean the CLI
-session completed successfully.
-
-To compare with Jev disabled, run `jev-agy --routing off`; requests still pass through the gateway
-to Google. Running `agy` directly bypasses the gateway.
+`jev-agy` and `jev-antigravity` launch Antigravity CLI (`agy`) through a gateway on port 8795. The
+launcher points `CLOUD_CODE_URL` and `GOOGLE_GEMINI_BASE_URL` at the gateway for that process,
+without changing the client's settings. It passes Antigravity arguments through.
 
 The upstream follows `settings.json`'s `modelProvider`. `GEMINI_API_KEY` supplies credentials for
 Gemini mode; its presence alone does not select that provider.
@@ -493,40 +493,20 @@ Gemini mode; its presence alone does not select that provider.
 The settings file is `~/.gemini/antigravity-cli/settings.json`. Change the port with
 `JEV_ANTIGRAVITY_PORT`.
 
-The Cloud Code adapter handles wrapped requests on `POST /v1internal:generateContent` and
-`POST /v1internal:streamGenerateContent`. It selects tools in `forced` mode so Google generates the
-function-call `Part` and its `thoughtSignature`. The gateway forwards the provider's response
-envelope and `Part`s, preserving `thoughtSignature` for later turns. It does not create signatures.
-Provider SSE events pass through when `?alt=sse` is present. Other internal calls, including account
-and model management, pass through untouched with the client's headers.
+The shared Gemini adapter handles wrapped requests on `POST /v1internal:generateContent` and
+`POST /v1internal:streamGenerateContent`. It selects tools in `forced` mode, asking Google to return
+a function-call `Part` with its `thoughtSignature`. The gateway forwards the response envelope and
+parts without creating signatures. Provider SSE passes through when `?alt=sse` is set. Other
+`/v1internal` calls, including account and model management, pass through with the client's headers.
 
-Controls with `agy` 1.2.17, OAuth on `daily-cloudcode-pa.googleapis.com` and the Low, Medium and
-High variants of Gemini 3.8 Flash found that `NONE` still generated a function call and `ANY` generated a
-function outside `allowedFunctionNames`, including with fresh request and session identifiers.
-The requests completed with HTTP 200 and `STOP`. A gateway decision of `forced` therefore does
-not prove that this backend followed the selected tool, and these checks do not establish routing
-savings. Use `jev-agy --routing off` for a baseline comparison.
-
-Real API checks used Node 24.21, `agy` 1.2.8 with OAuth to
-`daily-cloudcode-pa.googleapis.com`, and `gemini-3.8-flash-high`. All nine OpenRouter calls to
-`typesafe/jev-1.13` returned HTTP 200. In the CLI, a `view_file` call ran in `forced` mode at 0.99
-confidence, its continuation succeeded, and the session ended with `SUCCESS`.
-
-Two sequential closed-enum reads completed over JSON with Google's `thoughtSignature` preserved;
-both returned the exact expected values. Signed tool-call continuations also succeeded in JSON-array
-and SSE formats. JSON generation returned the requested marker, and a 20-line SSE response delivered
-all content progressively and ended with `STOP`.
-
-An earlier synthetic `direct` continuation failed with Google's HTTP 400 response:
-`Function call is missing a thought_signature in functionCall parts.` Gemini API and Cloud Code
-adapters now select tools in `forced` mode across supported Gemini wire formats. Google generates
-the function call and the gateway preserves its `thoughtSignature`.
-
-Plan mode and a longer CLI stream previously ended with CLI `status: ERROR`; the longer stream
-returned partial output after retries. Neither case was retested in these checks, so both remain
-unresolved. Gemini API-key mode and tool-call continuity with other models were not tested live.
-The earlier [review of #16](https://github.com/vinilana/jev-gateway/pull/16) observed management
-calls from `agy` 1.1.19 through `CLOUD_CODE_URL` against a local stub.
+Live checks used `agy` 1.2.17 with OAuth on `daily-cloudcode-pa.googleapis.com` and Gemini 3.8
+Flash Low, Medium and High. Native reads passed and `AUTO` selected the expected tool in 3/3
+requests. `NONE` still produced a function call in all three requests, and `ANY` called outside
+`allowedFunctionNames` in all three; each returned HTTP 200 with `STOP`. Earlier checks with `agy`
+1.2.8 exercised successful tool calls and continuations, but plan mode returned `ERROR` and the
+longer stream returned partial output, so both remain inconclusive. The public Gemini API and Gemini
+API-key mode were not tested live. A prior cache result reported 24,495 cached tokens out of
+30,453 input tokens (80.435%), which does not establish routing savings; details are in [PR #54](https://github.com/vinilana/jev-gateway/pull/54).
 
 ## Running it as a server for your own app
 
@@ -600,7 +580,7 @@ and the value of every closed-set argument. The answer selects a mode, which is 
 
 | Mode | When | What happens |
 | --- | --- | --- |
-| `direct` | Jev is confident about the tool and every argument is an enum, boolean, or constant | The gateway builds the tool call itself, streaming included. **No LLM call.** Unavailable for Gemini API and Cloud Code wire formats. Their adapters use `forced` mode so Google supplies the `thoughtSignature` needed on later turns. Also unavailable with Claude Code extended thinking, because the next turn would replay a tool call without a thinking block, which the API rejects |
+| `direct` | Jev is confident about the tool and every argument is an enum, boolean, or constant | The gateway builds the tool call itself, streaming included. **No LLM call.** Unavailable for Gemini API and Cloud Code requests. The shared Gemini adapter uses `forced` mode so Google supplies the `thoughtSignature` needed on later turns. Also unavailable with Claude Code extended thinking, because the next turn would replay a tool call without a thinking block, which the API rejects |
 | `forced` | Jev is confident about the tool, but some arguments are open-ended or the format requires a provider-generated call | Forwarded with the provider's tool-selection field set to that tool, so the LLM generates the call and fills its arguments. `ARGS_MODEL` can change the model for Chat Completions, Responses and Messages; Gemini keeps the client's model |
 | `hint` | Jev is confident, but `tool_choice` cannot be changed (Anthropic with thinking on, or a cached conversation) | Forwarded with a one-line suggestion added after the client's last block, so cached prefixes stay valid |
 | `none` | Jev is confident that no tool is needed | Forwarded with the provider's no-tool setting |

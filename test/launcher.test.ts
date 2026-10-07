@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -286,12 +286,18 @@ describe("jev-antigravity spec", () => {
     expect(antigravity.upstream(antigravitySettings("{"))).toBe("https://daily-cloudcode-pa.googleapis.com");
   });
 
-  it("points CLOUD_CODE_URL, GOOGLE_GEMINI_BASE_URL, and GEMINI_API_BASE at the gateway", () => {
+  it("points Cloud Code and Gemini provider requests at the gateway", () => {
     const env = antigravity.env!("http://127.0.0.1:8787");
     expect(env).toEqual({
       CLOUD_CODE_URL: "http://127.0.0.1:8787",
       GOOGLE_GEMINI_BASE_URL: "http://127.0.0.1:8787",
+    });
+  });
+
+  it("keeps GEMINI_API_BASE on the Gemini launcher", () => {
+    expect((clients.gemini as LauncherSpec).env!("http://127.0.0.1:8787")).toEqual({
       GEMINI_API_BASE: "http://127.0.0.1:8787",
+      GOOGLE_GEMINI_BASE_URL: "http://127.0.0.1:8787",
     });
   });
 
@@ -301,6 +307,7 @@ describe("jev-antigravity spec", () => {
     expect(help).not.toContain("--mode plan");
     expect(help).toContain('settings.json modelProvider: "gemini" and GEMINI_API_KEY set');
     expect(help).toContain("GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787 agy");
+    expect(help).not.toContain("GEMINI_API_BASE");
   });
 });
 
@@ -308,9 +315,13 @@ describe("jev-antigravity entrypoint", () => {
   it("is registered in package.json with runnable scripts", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as any;
     expect(pkg.bin["jev-antigravity"]).toBe("bin/jev-antigravity.mjs");
-    expect(pkg.bin["jev-agy"]).toBe("bin/jev-agy.mjs");
+    expect(pkg.bin["jev-agy"]).toBe("bin/jev-antigravity.mjs");
     expect(pkg.scripts.antigravity).toBe("node bin/jev-antigravity.mjs");
-    expect(pkg.scripts.agy).toBe("node bin/jev-agy.mjs");
+    expect(pkg.scripts.agy).toBe("node bin/jev-antigravity.mjs");
+  });
+
+  it("is executable as an npm CLI entrypoint", () => {
+    expect(statSync(agyLauncherBin).mode & 0o111).toBeGreaterThan(0);
   });
 
   it("--gateway-help describes the antigravity launcher without starting anything", () => {

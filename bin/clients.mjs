@@ -368,7 +368,6 @@ export const antigravity = {
   env: (origin) => ({
     CLOUD_CODE_URL: origin,
     GOOGLE_GEMINI_BASE_URL: origin,
-    GEMINI_API_BASE: origin,
   }),
   configHelp: (origin) =>
     `# Keep the gateway running (jev-antigravity --start), then either:\n` +
