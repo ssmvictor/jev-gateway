@@ -99,10 +99,9 @@ Codex uses port 8790, Claude Code 8789, OpenCode 8791, Gemini clients 8788, Devi
 8793. Change them with `JEV_CODEX_PORT`, `JEV_CLAUDE_PORT`, `JEV_OPENCODE_PORT`,
 `JEV_GEMINI_PORT`, `JEV_DEVIN_PORT` and `JEV_KILO_PORT`.
 
-`--status` checks the local `/health` endpoint. It labels the server's Jev provider separately
-from the key configured in the CLI's environment. Key presence and local health do not prove
-authentication with Jev; `--status` never calls the provider. Failed queries report the available
-reason without claiming the process has stopped. Unavailable server fields are omitted.
+`--status` checks local gateway health through `/health` and shows the server's Jev provider
+separately from the key configured in the CLI's environment. It never calls the provider, so a
+healthy gateway and a configured key do not confirm Jev authentication.
 
 ## Dashboard
 
