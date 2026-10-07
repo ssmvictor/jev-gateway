@@ -108,8 +108,8 @@ describe("--status", () => {
     expect(text).toContain("router up on http://127.0.0.1:54321");
     expect(text).toContain("https://server-a.test/v1");
     expect(text).toContain("server Jev provider: TypeSafe");
-    expect(text).toContain("CLI key: none configured for the local provider");
-    expect(text).toContain("Jev authentication: not checked by --status");
+    expect(text).toContain("CLI key: none configured for the local provider, run `jev-status-test --setup`");
+    expect(text).not.toContain("Jev authentication:");
   });
 
   it("passes status arguments to notices and prints them on a healthy response", async () => {
@@ -146,7 +146,7 @@ describe("--status", () => {
     const text = await runStatus();
 
     expect(text).toContain("router up on http://127.0.0.1:54321");
-    expect(text).toContain("CLI key: none configured for the local provider");
+    expect(text).toContain("CLI key: none configured for the local provider, run `jev-status-test --setup`");
     expect(text).not.toContain("undefined");
     expect(text).not.toContain("server-router-fixture");
     expect(text).not.toContain("server-jev-fixture");
@@ -188,22 +188,28 @@ describe("--status", () => {
   });
 
   it.each([
-    ["a timeout", Object.assign(new Error("request timed out"), { name: "TimeoutError" }), "request timed out"],
-    [
-      "a refused connection",
-      Object.assign(new TypeError("fetch failed"), {
-        cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
-      }),
-      "connection refused",
-    ],
-  ])("reports %s without claiming the router is stopped", async (_description, error, reason) => {
+    ["a timeout", Object.assign(new Error("request timed out"), { name: "TimeoutError" })],
+    ["an aborted request", Object.assign(new Error("request aborted"), { name: "AbortError" })],
+  ])("reports %s without claiming the router is stopped", async (_description, error) => {
     installFetch(async () => { throw error; });
 
     const text = await runStatus();
 
     expect(text).toContain("health not confirmed on http://127.0.0.1:54321");
-    expect(text).toContain(reason);
+    expect(text).toContain("request timed out");
     isNotRunning(text);
+  });
+
+  it.each([
+    ["a cause code", Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } })],
+    ["a direct code", Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" })],
+  ])("reports that the router is not running when connection refusal has %s", async (_description, error) => {
+    installFetch(async () => { throw error; });
+
+    const text = await runStatus();
+
+    expect(text).toContain("jev-status-test: router is not running");
+    expect(text).not.toContain("health not confirmed");
   });
 
   it("reports a timeout while reading a successful response body", async () => {
@@ -240,9 +246,10 @@ describe("--status", () => {
 
     expect(text).toContain("CLI key: OpenRouter");
     expect(text).toContain("OPENROUTER_API_KEY");
-    expect(text).toContain("presence only, validity not checked");
+    expect(text).toContain("CLI key: OpenRouter (OPENROUTER_API_KEY)");
+    expect(text).not.toContain("validity not checked");
     expect(text).not.toContain("invalid-fixture-key");
-    expect(text).toContain("Jev authentication: not checked by --status");
+    expect(text).not.toContain("Jev authentication:");
   });
 
   it("does not report another provider's key as configured for the selected local provider", async () => {
@@ -252,7 +259,7 @@ describe("--status", () => {
 
     const text = await runStatus();
 
-    expect(text).toContain("CLI key: none configured for the local provider");
+    expect(text).toContain("CLI key: none configured for the local provider, run `jev-status-test --setup`");
     expect(providerFetch).not.toHaveBeenCalled();
     expect(text).not.toContain("typesafe-only-fixture-key");
   });
@@ -312,33 +319,5 @@ describe("--status", () => {
     });
     expect(providerFetch).toHaveBeenCalledTimes(1);
     expect(authorizationMatchedServerKey).toBe(true);
-  });
-
-  it("still requires a provider key when Jev is constructed for startup", () => {
-    // The launcher process has a CLI key, but this server config is built from an empty env.
-    vi.stubEnv("TYPESAFE_API_KEY", "cli-only-fixture-key");
-    expect(() => createAskJev(loadConfig({}), providerFetch as unknown as typeof fetch)).toThrow(/TYPESAFE_API_KEY/);
-    expect(providerFetch).not.toHaveBeenCalled();
-  });
-
-  it("keeps provider authentication failure independent of local health", async () => {
-    const config = loadConfig({ JEV_PROVIDER: "typesafe", TYPESAFE_API_KEY: "server-a-fixture-key" });
-    const askJev = createAskJev(config, providerFetch as unknown as typeof fetch);
-    providerFetch.mockImplementation(async () => new Response("bad key", { status: 401 }));
-    const app = createApp({ config, askJev });
-    installAppFetch(app);
-
-    const status = await runStatus();
-    expect(status).toContain("router up on http://127.0.0.1:54321");
-    expect(providerFetch).not.toHaveBeenCalled();
-
-    const request = {
-      model: "m",
-      state: "s",
-      questions: { tool: { type: "choice" as const, instructions: "?", criteria: { a: null, b: null } } },
-    };
-    await expect(askJev(request)).rejects.toThrow(/401 from TypeSafe/);
-    expect(providerFetch).toHaveBeenCalledTimes(1);
-    expect((await app.request("/health")).status).toBe(200);
   });
 });

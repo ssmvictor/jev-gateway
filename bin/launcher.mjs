@@ -72,14 +72,25 @@ Environment (or ${ENV_FILES.at(-1)}):
   BROWSER            command --dashboard opens the page with; "none" only prints the URL
 `;
 
-  const health = async () => {
+  const probeHealth = async () => {
     try {
       const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1000) });
-      return response.ok ? await response.json() : undefined;
-    } catch {
-      return undefined;
+      if (!response.ok) return { failure: `HTTP ${response.status}` };
+      const running = await response.json();
+      if (!running || typeof running !== "object" || Array.isArray(running) || running.status !== "ok") {
+        return { failure: "invalid health response" };
+      }
+      return { running };
+    } catch (error) {
+      // Network errors can carry URLs and other private details; report only the failure category.
+      if (error instanceof SyntaxError) return { failure: "invalid JSON response" };
+      if (error?.name === "TimeoutError" || error?.name === "AbortError") return { failure: "request timed out" };
+      if ((error?.cause?.code ?? error?.code) === "ECONNREFUSED") return { failure: "connection refused" };
+      return { failure: "connection failed" };
     }
   };
+
+  const health = async () => (await probeHealth()).running;
 
   /** A notice is a courtesy: whatever goes wrong while working it out, the session still starts. */
   const notices = async (argv) => {
@@ -234,41 +245,21 @@ Environment (or ${ENV_FILES.at(-1)}):
     return console.log(`${spec.name}: router up on ${origin} → ${spec.upstream()} (logs: ${logFile})`);
   }
   if (flag === "--status") {
-    let running;
-    let failure;
-    // Status reports query failures; lifecycle commands keep their existing health probe.
-    try {
-      const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(1000) });
-      if (!response.ok) {
-        failure = `HTTP ${response.status}`;
-      } else {
-        const body = await response.json();
-        if (!body || typeof body !== "object" || Array.isArray(body) || body.status !== "ok") {
-          failure = "invalid health response";
-        } else {
-          running = body;
-        }
-      }
-    } catch (error) {
-      // Network errors can carry URLs and other private details; report only the failure category.
-      if (error instanceof SyntaxError) failure = "invalid JSON response";
-      else if (error?.name === "TimeoutError" || error?.name === "AbortError") failure = "request timed out";
-      else if ((error?.cause?.code ?? error?.code) === "ECONNREFUSED") failure = "connection refused";
-      else failure = "connection failed";
-    }
+    const { running, failure } = await probeHealth();
     if (running) {
       const upstream = typeof running.upstream === "string" && running.upstream ? ` → ${running.upstream}` : "";
       const via = typeof running.jev === "string" && running.jev
         ? `, server Jev provider: ${providers[running.jev]?.label ?? running.jev}` : "";
       console.log(`${spec.name}: router up on ${origin}${upstream}${via}`);
+    } else if (failure === "connection refused") {
+      console.log(`${spec.name}: router is not running`);
     } else {
       console.log(`${spec.name}: health not confirmed on ${origin} (${failure})`);
     }
     const configured = configuredProvider(process.env, providers);
     console.log(configured
-      ? `CLI key: ${providers[configured].label} (${providers[configured].keyEnv}; presence only, validity not checked)`
-      : "CLI key: none configured for the local provider");
-    console.log("Jev authentication: not checked by --status");
+      ? `CLI key: ${providers[configured].label} (${providers[configured].keyEnv})`
+      : `CLI key: none configured for the local provider, run \`${spec.name} --setup\``);
     console.log(`logs: ${logFile}`);
     for (const line of await notices(process.argv.slice(3))) console.log(line);
     return;
