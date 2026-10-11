@@ -639,7 +639,8 @@ The dashboard gets none of these identity or reply fields: it is built from requ
 
 Replies from the Responses API add a `response` object to the entry, with `id`, `model`, the
 unique tool names in `tools`, and `ending`. Other wire formats keep their token accounting and get
-no `response`. HTTP 200 alone does not mean the reply finished, so `ending` says how it ended:
+no `response`. Tool arguments that resemble Responses events do not change token accounting or
+reply metadata. HTTP 200 alone does not mean the reply finished, so `ending` says how it ended:
 
 | `ending` | Meaning |
 | --- | --- |

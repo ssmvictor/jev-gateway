@@ -68,6 +68,21 @@ describe("usage in a reply", () => {
     expect(usage).toEqual({ input: 100, cached: 64, cacheWrite: 0, output: 20, reasoning: 8 });
   });
 
+  it.each([
+    { format: "Gemini", wrapped: false, type: "response.output_text.delta" },
+    { format: "Gemini", wrapped: false, type: "response.completed" },
+    { format: "Cloud Code", wrapped: true, type: "response.output_text.delta" },
+    { format: "Cloud Code", wrapped: true, type: "response.completed" },
+  ])("keeps $format usage and ignores the nested argument type $type", async ({ wrapped, type }) => {
+    const reply = {
+      candidates: [{ content: { parts: [{ functionCall: { name: "emit_event", args: { type } }, thoughtSignature: "provider-signature" }] } }],
+      usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20, cachedContentTokenCount: 64 },
+    };
+    expect(await readReply(sse([wrapped ? { response: reply } : reply]))).toEqual({
+      usage: { input: 100, output: 20, cached: 64, cacheWrite: 0, reasoning: 0 },
+    });
+  });
+
   it("reports nothing rather than zeros when the reply never said", async () => {
     expect(await readUsage(new Response("<html>bad gateway</html>", { status: 502 }))).toBeUndefined();
   });
@@ -139,6 +154,19 @@ describe("reply metadata", () => {
     expect(await readReply(Response.json({
       id: "resp_compact", model: "gpt-compact", status: "completed", output: [{ type: "function_call", name: "read" }],
     }))).toEqual({ response: { id: "resp_compact", model: "gpt-compact", tools: ["read"], ending: "response.completed" } });
+  });
+
+  it("reads the root event type even when response metadata comes before it", async () => {
+    expect(await readReply(sse([{
+      response: {
+        id: "resp_root_type", metadata: { type: "response.output_text.delta" },
+        usage: { input_tokens: 100, output_tokens: 20 },
+      },
+      type: "response.completed",
+    }]))).toEqual({
+      usage: { input: 100, output: 20, cached: 0, cacheWrite: 0, reasoning: 0 },
+      response: { id: "resp_root_type", tools: [], ending: "response.completed" },
+    });
   });
 
   it("preserves usage reported by an unfamiliar Responses lifecycle event", async () => {

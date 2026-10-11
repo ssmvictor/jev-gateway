@@ -189,14 +189,8 @@ export async function readReply(response: Response, signal?: AbortSignal): Promi
       return;
     }
     if (!line.startsWith("data:")) return;
-    // Text and argument deltas can be large. Their type suffices to detect Responses without
-    // parsing their contents; only lifecycle events, output items and usage need JSON parsing.
-    const type = line.match(/"type"\s*:\s*"(response\.[a-z_.]+|error)"/)?.[1] ?? event;
-    if (type?.startsWith("response.")) metadata ??= { tools: [] };
-    if (type?.startsWith("response.") && type.endsWith(".delta")) return;
-    const relevant = type !== undefined && /^(response\.(created|in_progress|completed|incomplete|failed|output_item\.(added|done))|error)$/.test(type);
-    if (!relevant && !line.includes('"usage')) return;
     try {
+      // Tool arguments can contain a `type` too; only the parsed event root identifies the API.
       const payload: unknown = JSON.parse(line.slice(5));
       collect(payload, found);
       metadata = collectMetadata(payload, metadata, event);
