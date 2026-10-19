@@ -1,9 +1,10 @@
 import type { Decision } from "../decide.js";
 import type { DirectCall, RouterInput } from "../types.js";
 
-/** Metadata the gateway uses for logging. */
+/** Request metadata for logs, available even when Jev is not consulted. */
 export interface RequestMetadata {
   model?: string;
+  stream?: boolean;
   tools?: number;
 }
 
@@ -20,8 +21,10 @@ export interface Adapter<Req extends { model?: string; stream?: boolean }> {
   directJson(req: Req, call: DirectCall): object;
   /** The streamed form of the same answer: an SSE body, or a body with its own content type. */
   directStream(req: Req, call: DirectCall, url: URL): string | { body: string | Uint8Array<ArrayBuffer>; contentType: string };
-  /** Extra request metadata hidden in a provider-specific envelope or path. */
+  /** Count tools without building a router input or consulting Jev. */
   metadata?(req: Req | undefined, url: URL): RequestMetadata;
+  /** For APIs that put the model or the choice to stream in the URL instead of the body (Gemini). */
+  fromUrl?(url: URL): { model?: string; stream?: boolean };
 }
 
 export const sse = (events: { event?: string; data: string }[]): string =>

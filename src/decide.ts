@@ -129,6 +129,7 @@ export async function decide(input: RouterInput, config: Config, askJev: AskJev)
   const directCalls = config.directCalls && input.directCalls !== false;
   const startedAt = performance.now();
   const state = buildState(input, config);
+  if (state.unrepresentable) return { mode: "passthrough", reason: "incomplete_routing_context" };
   let tools = input.tools;
   let shortlistTokens = 0;
   let result: SystemOneResult<Questions>;

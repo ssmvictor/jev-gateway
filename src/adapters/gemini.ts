@@ -1,4 +1,3 @@
-import { truncate } from "../state.js";
 import type { DirectCall, Json, JsonSchema, RouterInput } from "../types.js";
 import { type Adapter, sse } from "./adapter.js";
 
@@ -6,10 +5,12 @@ export interface GeminiPart {
   text?: string;
   thought?: boolean;
   functionCall?: {
+    id?: string;
     name: string;
     args?: Record<string, unknown>;
   };
   functionResponse?: {
+    id?: string;
     name: string;
     response?: Record<string, unknown>;
   };
@@ -57,6 +58,14 @@ export interface GeminiRequest {
     [key: string]: unknown;
   };
   [key: string]: unknown;
+}
+
+/** The functions the router can offer, and the names of the tools Google runs itself beside them. */
+function visibleTools(tools: GeminiTool[], allowed: Set<string> | undefined) {
+  const declarations = tools.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  // Hosted tools must be counted the same way for routed and baseline requests.
+  const hosted = [...new Set(tools.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations")))];
+  return { declarations, hosted };
 }
 
 function innerRequest(req: GeminiRequest | undefined): GeminiRequest | undefined {
@@ -119,11 +128,8 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
   const rawTools: unknown = inner.tools ?? [];
   if (!Array.isArray(rawTools) || !rawTools.every(isGeminiTool)) return { skip: "unreadable_request" };
   const tools = rawTools as GeminiTool[];
-  const rawDecls = tools.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name));
+  const { declarations: rawDecls, hosted } = visibleTools(tools, allowed);
   if (rawDecls.length === 0) return { skip: "no_tools" };
-  // Tools Google runs itself (googleSearch, codeExecution, urlContext) are entries without
-  // declarations. Jev sees them so it isn't blind to them, but they can't be forced by name.
-  const hosted = tools.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"));
 
   const systemInstruction: unknown = inner.systemInstruction;
   if (
@@ -133,19 +139,21 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
         (!Array.isArray(systemInstruction.parts) || !systemInstruction.parts.every(isGeminiPart))))
   ) return { skip: "unreadable_request" };
   const systemParts = isRecord(systemInstruction) && Array.isArray(systemInstruction.parts) ? systemInstruction.parts : [];
-  const system = truncate(
-    systemParts
-      .map((part) => part.text)
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("\n\n"),
-    maxMessageChars,
-  );
+  const system = systemParts
+    .map((part) => part.text)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n\n");
 
   const turns: RouterInput["turns"] = [];
   for (const content of contents) {
     const role = content.role === "model" ? "assistant" : "user";
     const textParts: string[] = [];
-    const toolCalls: Array<{ tool: string; arguments: string }> = [];
+    const toolCalls: Array<{ tool: string; arguments: string; call_id?: string }> = [];
+    const flush = () => {
+      if (textParts.length || toolCalls.length) turns.push({ role,
+        ...(textParts.length ? { text: textParts.splice(0).join("\n") } : {}),
+        ...(toolCalls.length ? { tool_calls: toolCalls.splice(0) as unknown as Json[] } : {}) });
+    };
 
     for (const part of content.parts ?? []) {
       if (part.thought === true) continue;
@@ -154,24 +162,21 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
       } else if (part.functionCall) {
         toolCalls.push({
           tool: part.functionCall.name,
-          arguments: truncate(JSON.stringify(part.functionCall.args ?? {}), maxMessageChars),
+          ...(typeof part.functionCall.id === "string" ? { call_id: part.functionCall.id } : {}),
+          arguments: JSON.stringify(part.functionCall.args ?? {}),
         });
       } else if (part.functionResponse) {
+        flush();
         turns.push({
           role: "tool_result",
           tool: part.functionResponse.name,
-          content: truncate(JSON.stringify(part.functionResponse.response ?? {}), maxMessageChars),
+          ...(typeof part.functionResponse.id === "string" ? { call_id: part.functionResponse.id } : {}),
+          content: JSON.stringify(part.functionResponse.response ?? {}),
         });
       }
     }
 
-    if (textParts.length || toolCalls.length) {
-      turns.push({
-        role,
-        ...(textParts.length ? { text: truncate(textParts.join("\n"), maxMessageChars) } : {}),
-        ...(toolCalls.length ? { tool_calls: toolCalls as unknown as Json[] } : {}),
-      });
-    }
+    flush();
   }
 
   const mode = config?.mode ?? "AUTO";
@@ -182,7 +187,7 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
     turns,
     tools: [
       ...rawDecls.map((fn) => ({ kind: "function" as const, name: fn.name, description: fn.description, parameters: fn.parameters })),
-      ...[...new Set(hosted)].map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
+      ...hosted.map((name) => ({ kind: "hosted" as const, name, description: `Google's built-in ${name} tool.` })),
     ],
     // Gemini replays provider signatures on later turns; synthetic calls cannot carry them.
     directCalls: false,
@@ -247,6 +252,12 @@ function directStream(req: GeminiRequest, call: DirectCall, url: URL) {
     : { body: `[${chunk}]`, contentType: "application/json" };
 }
 
+/** Gemini names the model and chooses streaming in the path: `/v1beta/models/<model>:streamGenerateContent`. */
+function fromUrl(url: URL) {
+  const match = /\/models\/([^/:]+):(\w+)/.exec(url.pathname);
+  return { model: match?.[1], stream: match?.[2] === "streamGenerateContent" };
+}
+
 /** Model metadata lives in the Gemini path or the Cloud Code envelope. */
 function metadata(req: GeminiRequest | undefined, url: URL) {
   const beta = /^\/v1beta\/models\/([^/:]+)(?::|$)/.exec(url.pathname);
@@ -260,11 +271,8 @@ function metadata(req: GeminiRequest | undefined, url: URL) {
       ? rawAllowedNames
       : undefined;
   const allowed = allowedNames?.length ? new Set(allowedNames) : undefined;
-  const tools = toolGroups
-    ? toolGroups.flatMap((tool) => tool.functionDeclarations ?? []).filter((fn) => !allowed || allowed.has(fn.name)).length +
-      new Set(toolGroups.flatMap((tool) => Object.keys(tool).filter((key) => key !== "functionDeclarations"))).size
-    : undefined;
-  return { model, tools };
+  const visible = toolGroups ? visibleTools(toolGroups, allowed) : undefined;
+  return { model, tools: visible ? visible.declarations.length + visible.hosted.length : undefined };
 }
 
 /** Google Gemini API and Cloud Code (`/v1beta/models/...`, `/v1internal:streamGenerateContent`). */
@@ -273,5 +281,6 @@ export const geminiAdapter: Adapter<GeminiRequest> = {
   apply,
   directJson,
   directStream,
+  fromUrl,
   metadata,
 };
