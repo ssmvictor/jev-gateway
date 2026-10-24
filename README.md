@@ -163,12 +163,12 @@ proposal joins the log line when both the reply and Jev's answer are in. Nothing
 applied: no forced tool, no direct answer, no hint, no `ARGS_MODEL`.
 
 - **The request does not wait for Jev.** Jev runs beside the request instead of in front of it. The
-  gateway still reads the conversation and builds Jev's question before the request leaves, which
-  is local work; waiting for Jev's answer is not. A slow or failing Jev never touches the reply, and
-  `durationMs` measures the reply, not Jev. The reply's `x-jev-gateway-reason` header reads `shadow`,
-  with no tool, confidence or latency headers, because none of that exists yet when the reply
-  starts. It reads `shadow` even for a request Jev then turns out not to have been asked about; the
-  log line has the real reason.
+  gateway starts forwarding the request first and only then reads the conversation and builds
+  Jev's question, so not even that local work holds it up. A slow or failing Jev never touches the
+  reply, and `durationMs` measures the reply, not Jev. The reply's `x-jev-gateway-reason` header
+  reads `shadow`, with no tool, confidence or latency headers, because none of that exists yet when
+  the reply starts. It reads `shadow` even for a request Jev then turns out not to have been asked
+  about; the log line has the real reason.
 - **Jev still costs tokens.** Each request is still one Jev call (two for long tool lists).
 - **The proposal is in `shadow`:** its `mode`, plus `reason`, `tool`, `kind` and `confidence` where
   they apply. A `direct` proposal does not copy the arguments. The line itself reads `passthrough`
@@ -198,9 +198,14 @@ and return the same answers, so the choice is about whose account and billing yo
 | Provider | Key variable | Default model | Get a key |
 | --- | --- | --- | --- |
 | TypeSafe (official) | `TYPESAFE_API_KEY` | `jev-latest` | [typesafe.ai](https://typesafe.ai) |
-| OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.13` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
+| OpenRouter | `OPENROUTER_API_KEY` | `typesafe/jev-1.14` | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) |
 | Vercel AI Gateway | `AI_GATEWAY_API_KEY` | `typesafe-ai/jev` | [Vercel dashboard](https://vercel.com/dashboard/ai-gateway/api-keys) |
 | OpenCode | `OPENCODE_API_KEY` | `jev-1.13-free` | [OpenCode Zen](https://opencode.ai/auth) |
+
+TypeSafe's `jev-latest` still answers as Jev 1.13 (checked 2026-10-18). TypeSafe has said it will
+move the alias to Jev 1.14 about a week after the 2026-10-14 release; until then
+`JEV_MODEL=jev-1.14.0` picks 1.14. OpenCode lists only Jev 1.13 so far, and Vercel names no
+version in its id.
 
 OpenCode serves two ids at the same endpoint: `jev-1.13-free` (free,
 [for a limited time](https://opencode.ai/docs/zen/#jev)) and the paid `jev-1.13`. The gateway
@@ -675,6 +680,38 @@ The budget covers the complete JSON serialization, including escaping, envelope,
 measured in JavaScript UTF-16 code units. Text clipping never splits a surrogate pair. Only Jev's
 request is shortened; the provider request and the caller's input remain intact.
 
+### Images
+
+Jev reads images, so a screenshot the user pastes, or one a tool returns, counts in the decision
+instead of reaching Jev as the word `[image]`. The newest `JEV_MAX_IMAGES` (default 2) go with the
+question. The others stay placeholders. The client's request is not changed.
+
+Only images the conversation carries inline, as base64 in the request body, and that Jev accepts as
+they are go to Jev:
+
+| Image | What Jev gets |
+| --- | --- |
+| PNG or JPEG, 280 to 1568 pixels on each side, up to 16 MiB | The image |
+| Larger or smaller, animated PNG, WebP, GIF, or anything else | The placeholder. The gateway does not resize or convert images |
+| Given by URL | The placeholder. The gateway does not fetch it |
+
+An image costs Jev tokens: about 1,100 for 640×480 and 6,600 for 1568×1568, measured against
+`jev-1.14.0` on 2026-10-18. The gateway keeps fewer turns of the conversation to leave the images
+that room. When even the newest turn would not fit beside them, Jev is asked without images.
+
+TypeSafe calls images experimental and does not yet consider them ready for production: the format,
+the limits and the accuracy may change between releases. The gateway opts in per call with the
+`TypeSafe-Danger-Zone-Images: true` header, sent only when the call carries an image. If the
+provider refuses it (400, 413, 415 or 422), the gateway asks again without the images and routes on
+text, so a provider that does not take images costs one extra Jev call on each request that has one.
+`imagesRefused` in the log line says why. Set `JEV_MAX_IMAGES=0` to skip images entirely.
+
+On 2026-10-18, TypeSafe's API took images through this code with `jev-latest` (Jev 1.13) and
+`jev-1.14.0`. Jev named the color of synthetic test images correctly, and the API refused a
+1600-pixel image and a request without the header, as the table above expects. Whether OpenRouter,
+Vercel and OpenCode pass images on to Jev has not been checked. The dashboard shows how many images
+Jev saw when you hover over the Jev latency.
+
 ## Configuration
 
 Settings are environment variables. The launchers read them from your shell,
@@ -694,6 +731,7 @@ list. The ones worth knowing:
 | `JEV_TIMEOUT_MS` | `4000` | How long to wait for Jev before letting the LLM decide |
 | `JEV_MAX_STATE_CHARS` | `60000` | Serialized routing-state budget; integer at least 64 |
 | `JEV_MAX_MESSAGE_CHARS` | `4000` | Per-text-field routing limit; positive integer |
+| `JEV_MAX_IMAGES` | `2` | Most images Jev sees in one call, newest first. `0` keeps every image a placeholder. See [Images](#images) |
 | `ARGS_MODEL` | unset | A cheaper model for `forced` calls in Chat Completions, Responses and Messages; ignored for Gemini |
 | `HOST` | `127.0.0.1` | Interface to listen on. Set `ROUTER_API_KEY` before exposing it |
 | `JEV_DEBUG_DUMP_DIR` | unset | Write requests and response summaries to this folder. Credentials in headers are redacted; bodies are written whole, system prompts and conversation included, in files only you can read |
@@ -708,7 +746,9 @@ a SHA-256 fingerprint of the gateway's runtime files, calculated once at startup
 those files change, even if the package version stays the same, and stays fixed for that running
 process. It covers `dist` in a compiled install or `src` in development, including adapters,
 provider definitions and dashboard HTML. It excludes environment files, source maps and external
-dependencies. A restart with identical files keeps the same build ID and gets a new run ID.
+dependencies. A restart with identical files keeps the same build ID and gets a new run ID. If
+those files cannot be read at startup, the gateway starts anyway and its entries have no
+`gatewayBuildId`.
 
 Standard log entries contain metadata only, including for `direct` calls: tool arguments stay in
 the client reply. A `direct` entry has no `sentModel` or LLM usage, because it never calls the LLM.
@@ -743,8 +783,9 @@ contain request bodies as documented above.
   a tool anyway, it may produce an incomplete reply and the agent will retry. Raise
   `JEV_MIN_CONFIDENCE` if you see this.
 - In `hint` mode the LLM still does its own reasoning, so the gain is accuracy, not cost.
-- Jev reads text only and has a 32k-token window. Images become placeholders and long conversations
-  keep their newest turns. It is most accurate in English.
+- Jev has a 32k-token window. Long conversations keep their newest turns, and images take room
+  from them. Images Jev cannot take stay placeholders (see [Images](#images)). Jev is most accurate
+  in English.
 - The default confidence thresholds are starting points. Use the dashboard and baseline mode to tune
   them for your own work.
 - A gateway started by a launcher has no key of its own, because the one `Authorization` header a
@@ -778,6 +819,11 @@ made Opus 5 and Sonnet 5 clearly worse, and GPT-5.6 Luna got cheaper but less of
 runs solved, against 5 of 5 without routing). Measure on your own work before trusting it: five
 runs per cell is a small sample. The chart, the spread of the individual runs, the raw data, how
 one run was caught copying from another, and how to run it yourself are in that repository.
+
+The Codex rows were measured when every client defaulted to `JEV_ON_NONE=force_none`. `jev-codex`
+now defaults to `passthrough` (see [How it works](#how-it-works)), so they do not measure its
+current default. The benchmark starts its gateway with `JEV_CLIENT=bench`, which still gets
+`force_none` unless `JEV_ON_NONE` is set.
 
 A [separate 20-run OpenCode series](https://github.com/vinilana/jev-gateway-bench/tree/main/results/2026-09-23-opencode-opus-5-cliproxy-comparison)
 used Opus 5 on the same tasks. With routing on, median output tokens fell by 62% and time by 79% on

@@ -1,3 +1,4 @@
+import { collectImages } from "../images.js";
 import type { DirectCall, Json, JsonSchema, RouterInput } from "../types.js";
 import { type Adapter, sse } from "./adapter.js";
 
@@ -144,6 +145,7 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n\n");
 
+  const images = collectImages();
   const turns: RouterInput["turns"] = [];
   for (const content of contents) {
     const role = content.role === "model" ? "assistant" : "user";
@@ -157,8 +159,11 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
 
     for (const part of content.parts ?? []) {
       if (part.thought === true) continue;
+      const image = images.ref(part);
       if (part.text) {
         textParts.push(part.text);
+      } else if (image) {
+        textParts.push(image);
       } else if (part.functionCall) {
         toolCalls.push({
           tool: part.functionCall.name,
@@ -192,6 +197,7 @@ function toInput(req: GeminiRequest, maxMessageChars: number): RouterInput | { s
     // Gemini replays provider signatures on later turns; synthetic calls cannot carry them.
     directCalls: false,
     toolChoice,
+    images,
   };
 }
 
